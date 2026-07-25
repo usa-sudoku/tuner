@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Piano Tuning Analyser - Global Curve</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #121212;
+      color: #e0e0e0;
+      margin: 0;
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .card {
+      background: #1e1e1e;
+      border-radius: 16px;
+      padding: 20px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      box-sizing: border-box;
+      text-align: center;
+    }
+    h1 { font-size: 1.3rem; margin-top: 0; color: #bb86fc; }
+    
+    .config-group {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #2a2a2a;
+      padding: 8px 14px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+    .config-group label { font-size: 0.85rem; color: #ccc; }
+    .config-group input {
+      width: 65px;
+      background: #121212;
+      border: 1px solid #bb86fc;
+      color: #fff;
+      padding: 5px;
+      border-radius: 6px;
+      text-align: center;
+      font-size: 0.95rem;
+      font-weight: bold;
+    }
+
+    button {
+      background: #bb86fc;
+      color: #000;
+      border: none;
+      padding: 10px 18px;
+      font-size: 0.95rem;
+      font-weight: bold;
+      border-radius: 20px;
+      cursor: pointer;
+      margin-bottom: 10px;
+      width: 100%;
+    }
+    button.btn-save { background: #03dac6; margin-top: 10px; }
+    button.btn-clear { background: #cf6679; color: #fff; font-size: 0.8rem; padding: 6px 12px; margin-top: 10px; width: auto; }
+
+    .note-display { font-size: 3rem; font-weight: bold; color: #fff; margin: 2px 0; }
+    .freq-display { font-size: 1.1rem; color: #03dac6; }
+    .cents-display { font-size: 1.5rem; margin: 8px 0; font-weight: bold; }
+    .cents-perfect { color: #03dac6; }
+    .cents-off { color: #cf6679; }
+    
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+      background: #2a2a2a;
+      padding: 10px;
+      border-radius: 8px;
+      text-align: left;
+      font-size: 0.8rem;
+    }
+    .metrics div span { display: block; color: #a0a0a0; }
+    .metrics div strong { font-size: 0.9rem; color: #fff; }
+
+    .section-title { font-size: 0.95rem; color: #bb86fc; margin: 15px 0 5px 0; text-align: left; }
+    canvas {
+      width: 100%;
+      height: 140px;
+      background: #121212;
+      border-radius: 8px;
+      border: 1px solid #333;
+    }
+    .progress-bar {
+      font-size: 0.8rem;
+      color: #a0a0a0;
+      margin-top: 4px;
+    }
+    .legend {
+      display: flex;
+      justify-content: space-around;
+      font-size: 0.75rem;
+      margin-top: 6px;
+      color: #aaa;
+    }
+    .legend span::before {
+      content: "■ ";
+    }
+    .legend-dots::before { color: #03dac6; }
+    .legend-line::before { color: #bb86fc; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>Klavier Stimmkurven-Analyser</h1>
+  
+  <div class="config-group">
+    <label for="a4Input">Referenz A4 (Hz):</label>
+    <input type="number" id="a4Input" value="440" step="0.5" min="400" max="480">
+  </div>
+
+  <button id="startBtn">1. Mikrofon aktivieren</button>
+
+  <div class="note-display" id="note">--</div>
+  <div class="freq-display"><span id="freq">0.00</span> Hz</div>
+  <div class="cents-display" id="centsContainer"><span id="cents">0</span> Cents</div>
+
+  <div class="metrics">
+    <div>
+      <span>Reine Frequenz:</span>
+      <strong id="pureTarget">-- Hz</strong>
+    </div>
+    <div>
+      <span>Gespreizte Soll-Freq:</span>
+      <strong id="stretchedTarget">-- Hz</strong>
+    </div>
+    <div>
+      <span>Einzel-Messung (B):</span>
+      <strong id="inharmonicity">--</strong>
+    </div>
+    <div>
+      <span>Globale Spreizung:</span>
+      <strong id="stretchCents">+0.0 Cts</strong>
+    </div>
+  </div>
+
+  <button id="saveBtn" class="btn-save" disabled>2. Ton für Gesamtkurve speichern</button>
+
+  <div class="section-title">Globale Inharmonizitäts-Kurve</div>
+  <canvas id="curveCanvas" width="400" height="140"></canvas>
+  <div class="progress-bar" id="progressText">0 Messungen vorhanden</div>
+  
+  <div class="legend">
+    <span class="legend-dots">Einzelmessungen</span>
+    <span class="legend-line">Geglättete Stimmkurve</span>
+  </div>
+
+  <button id="clearBtn" class="btn-clear">Messwerte zurücksetzen</button>
+</div>
+
+<script>
+let audioCtx, analyser, microphone;
+let isListening = false;
+let currentKeyNum = null;
+let currentB = 0;
+
+// Speicher für Messungen und globale geglättete B-Werte (1 bis 88)
+let pianoData = JSON.parse(localStorage.getItem('piano_tuning_raw')) || new Array(88).fill(null);
+let smoothedB = new Array(88).fill(0);
+
+const startBtn = document.getElementById('startBtn');
+const saveBtn = document.getElementById('saveBtn');
+const clearBtn = document.getElementById('clearBtn');
+const a4Input = document.getElementById('a4Input');
+
+const noteEl = document.getElementById('note');
+const freqEl = document.getElementById('freq');
+const centsEl = document.getElementById('cents');
+const centsContainer = document.getElementById('centsContainer');
+const pureTargetEl = document.getElementById('pureTarget');
+const stretchedTargetEl = document.getElementById('stretchedTarget');
+const inharmonicityEl = document.getElementById('inharmonicity');
+const stretchCentsEl = document.getElementById('stretchCents');
+const progressText = document.getElementById('progressText');
+const canvas = document.getElementById('curveCanvas');
+const ctx = canvas.getContext('2d');
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+// Erste Modellierung berechnen
+updateGlobalModel();
+
+startBtn.addEventListener('click', async () => {
+  if (isListening) return;
+
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 32768;
+    
+    microphone = audioCtx.createMediaStreamSource(stream);
+    microphone.connect(analyser);
+
+    isListening = true;
+    startBtn.innerText = "Mikrofon aktiv";
+    startBtn.style.background = "#03dac6";
+    saveBtn.disabled = false;
+
+    processAudio();
+  } catch (err) {
+    alert("Mikrofonzugriff verweigert: " + err);
+  }
+});
+
+saveBtn.addEventListener('click', () => {
+  if (currentKeyNum !== null && currentKeyNum >= 1 && currentKeyNum <= 88) {
+    pianoData[currentKeyNum - 1] = currentB;
+    localStorage.setItem('piano_tuning_raw', JSON.stringify(pianoData));
+    updateGlobalModel();
+  }
+});
+
+clearBtn.addEventListener('click', () => {
+  if (confirm("Möchtest du alle gespeicherten Messwerte zurücksetzen?")) {
+    pianoData = new Array(88).fill(null);
+    localStorage.removeItem('piano_tuning_raw');
+    updateGlobalModel();
+  }
+});
+
+function processAudio() {
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Float32Array(bufferLength);
+  
+  function analyze() {
+    if (!isListening) return;
+    
+    analyser.getFloatFrequencyData(dataArray);
+    
+    let maxVolume = -Infinity;
+    let bestBin = -1;
+    
+    const nyquist = audioCtx.sampleRate / 2;
+    const minBin = Math.floor((25 / nyquist) * bufferLength);
+    const maxBin = Math.floor((4200 / nyquist) * bufferLength);
+
+    for (let i = minBin; i < maxBin; i++) {
+      if (dataArray[i] > maxVolume) {
+        maxVolume = dataArray[i];
+        bestBin = i;
+      }
+    }
+
+    if (maxVolume > -55 && bestBin !== -1) {
+      const fundFreq = bestBin * (nyquist / bufferLength);
+      const a4Freq = parseFloat(a4Input.value) || 440;
+      
+      const h2Freq = findHarmonicPeak(dataArray, fundFreq * 2, nyquist, bufferLength);
+      
+      currentB = 0;
+      if (h2Freq > 0) {
+        const ratio = h2Freq / (2 * fundFreq);
+        currentB = (Math.pow(ratio, 2) - 1) / 4;
+        if (currentB < 0 || isNaN(currentB)) currentB = 0;
+      }
+
+      const noteInfo = calculateTuning(fundFreq, a4Freq);
+      currentKeyNum = noteInfo.keyNum;
+
+      noteEl.innerText = noteInfo.note;
+      freqEl.innerText = fundFreq.toFixed(2);
+      pureTargetEl.innerText = noteInfo.pureTarget.toFixed(2) + " Hz";
+      stretchedTargetEl.innerText = noteInfo.stretchedTarget.toFixed(2) + " Hz";
+      
+      centsEl.innerText = (noteInfo.cents > 0 ? "+" : "") + noteInfo.cents;
+      stretchCentsEl.innerText = "+" + noteInfo.stretchCents.toFixed(1) + " Cts";
+      
+      if (Math.abs(noteInfo.cents) <= 3) {
+        centsContainer.className = "cents-display cents-perfect";
+      } else {
+        centsContainer.className = "cents-display cents-off";
+      }
+
+      inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "0.00e+0";
+    }
+
+    requestAnimationFrame(analyze);
+  }
+  
+  analyze();
+}
+
+function findHarmonicPeak(dataArray, targetFreq, nyquist, bufferLength) {
+  const searchRange = targetFreq * 0.04;
+  const minBin = Math.floor(((targetFreq - searchRange) / nyquist) * bufferLength);
+  const maxBin = Math.floor(((targetFreq + searchRange) / nyquist) * bufferLength);
+  
+  let maxVol = -Infinity;
+  let peakBin = -1;
+  
+  for (let i = minBin; i <= maxBin; i++) {
+    if (dataArray[i] > maxVol) {
+      maxVol = dataArray[i];
+      peakBin = i;
+    }
+  }
+  
+  return peakBin !== -1 ? peakBin * (nyquist / bufferLength) : 0;
+}
+
+function calculateTuning(freq, a4Freq) {
+  const noteNum = 12 * (Math.log(freq / a4Freq) / Math.log(2)) + 69;
+  const roundedNote = Math.round(noteNum);
+  const pureTarget = a4Freq * Math.pow(2, (roundedNote - 69) / 12);
+  
+  const keyNum = roundedNote - 20;
+
+  // Verwende den geglätteten B-Wert aus dem globalen Modell
+  let globalB = 0.0003; // Standard-Fallback für durchschnittliches Klavier
+  if (keyNum >= 1 && keyNum <= 88) {
+    globalB = smoothedB[keyNum - 1];
+  }
+
+  const stretchFactor = Math.sqrt(1 + globalB * 4); 
+  const stretchedTarget = pureTarget * stretchFactor;
+  
+  const cents = Math.round(1200 * (Math.log(freq / stretchedTarget) / Math.log(2)));
+  const stretchCents = 1200 * (Math.log(stretchedTarget / pureTarget) / Math.log(2));
+  
+  const noteIndex = (roundedNote % 12 + 12) % 12;
+  const octave = Math.floor(roundedNote / 12) - 1;
+  
+  return {
+    keyNum: keyNum,
+    note: NOTE_NAMES[noteIndex] + octave,
+    pureTarget: pureTarget,
+    stretchedTarget: stretchedTarget,
+    cents: cents,
+    stretchCents: stretchCents
+  };
+}
+
+// Logarithmische Regression zur Berechnung der geglätteten Stimmkurve
+function updateGlobalModel() {
+  const points = [];
+  pianoData.forEach((val, idx) => {
+    if (val !== null && val > 0) {
+      points.push({ x: idx + 1, y: Math.log(val) });
+    }
+  });
+
+  progressText.innerText = `${points.length} Messwerte gespeichert`;
+
+  if (points.length >= 2) {
+    // Lineare Regression über log(B)
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    const n = points.length;
+
+    points.forEach(p => {
+      sumX += p.x;
+      sumY += p.y;
+      sumXY += p.x * p.y;
+      sumXX += p.x * p.x;
+    });
+
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+
+    for (let i = 0; i < 88; i++) {
+      smoothedB[i] = Math.exp(intercept + slope * (i + 1));
+    }
+  } else {
+    // Standard-Spreizungsverlauf, wenn noch nicht genügend Daten da sind
+    for (let i = 0; i < 88; i++) {
+      smoothedB[i] = 0.0001 * Math.pow(1.03, 88 - (i + 1));
+    }
+  }
+
+  drawGraph(points);
+}
+
+function drawGraph(points) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Raster zeichnen
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height / 2);
+  ctx.lineTo(canvas.width, canvas.height / 2);
+  ctx.stroke();
+
+  // 1. Geglättete Ausgleichskurve (Lila)
+  ctx.strokeStyle = '#bb86fc';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+
+  for (let i = 0; i < 88; i++) {
+    const x = (i / 87) * (canvas.width - 20) + 10;
+    const logVal = Math.log10(smoothedB[i]);
+    const y = canvas.height - ((logVal + 5) / 3) * canvas.height;
+
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // 2. Einzelne Messpunkte (Türkis)
+  ctx.fillStyle = '#03dac6';
+  pianoData.forEach((val, idx) => {
+    if (val !== null && val > 0) {
+      const x = (idx / 87) * (canvas.width - 20) + 10;
+      const logVal = Math.log10(val);
+      const y = canvas.height - ((logVal + 5) / 3) * canvas.height;
+
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+</script>
+
+</body>
+</html>
