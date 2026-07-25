@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Piano Tuning Analyser - Global Curve</title>
+  <title>Piano Tuning Analyser - Improved Pro Version</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -60,7 +60,9 @@
       cursor: pointer;
       margin-bottom: 10px;
       width: 100%;
+      transition: opacity 0.3s;
     }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
     button.btn-save { background: #03dac6; margin-top: 10px; }
     button.btn-clear { background: #cf6679; color: #fff; font-size: 0.8rem; padding: 6px 12px; margin-top: 10px; width: auto; }
 
@@ -208,7 +210,8 @@ startBtn.addEventListener('click', async () => {
     isListening = true;
     startBtn.innerText = "Mikrofon aktiv";
     startBtn.style.background = "#03dac6";
-    saveBtn.disabled = false;
+    // Der Save-Button wird erst aktiv, wenn wir einen validen B-Wert gemessen haben
+    saveBtn.disabled = true;
 
     processAudio();
   } catch (err) {
@@ -217,7 +220,7 @@ startBtn.addEventListener('click', async () => {
 });
 
 saveBtn.addEventListener('click', () => {
-  if (currentKeyNum !== null && currentKeyNum >= 1 && currentKeyNum <= 88) {
+  if (currentKeyNum !== null && currentKeyNum >= 1 && currentKeyNum <= 88 && currentB > 0) {
     pianoData[currentKeyNum - 1] = currentB;
     localStorage.setItem('piano_tuning_raw', JSON.stringify(pianoData));
     updateGlobalModel();
@@ -232,6 +235,19 @@ clearBtn.addEventListener('click', () => {
   }
 });
 
+// NEU: Parabolische Interpolation für extrem präzise Frequenzbestimmung
+function getInterpolatedPeakBin(dataArray, bin) {
+  if (bin <= 0 || bin >= dataArray.length - 1) return bin;
+  
+  const y1 = dataArray[bin - 1];
+  const y2 = dataArray[bin];
+  const y3 = dataArray[bin + 1];
+  
+  // Parabel-Fit für das exakte Frequenz-Zentrum (Sub-Bin Accuracy)
+  const p = 0.5 * (y1 - y3) / (y1 - 2 * y2 + y3);
+  return bin + p;
+}
+
 function processAudio() {
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Float32Array(bufferLength);
@@ -245,6 +261,7 @@ function processAudio() {
     let bestBin = -1;
     
     const nyquist = audioCtx.sampleRate / 2;
+    // Frequenzbereich ca. 25 Hz bis 4200 Hz abtasten
     const minBin = Math.floor((25 / nyquist) * bufferLength);
     const maxBin = Math.floor((4200 / nyquist) * bufferLength);
 
@@ -255,18 +272,31 @@ function processAudio() {
       }
     }
 
+    // Grundrauschen ausblenden (Schwellenwert)
     if (maxVolume > -55 && bestBin !== -1) {
-      const fundFreq = bestBin * (nyquist / bufferLength);
+      
+      // Nutze die interpolierte Bin-Position
+      const exactPeakBin = getInterpolatedPeakBin(dataArray, bestBin);
+      const fundFreq = exactPeakBin * (nyquist / bufferLength);
       const a4Freq = parseFloat(a4Input.value) || 440;
       
+      // Finde den 2. Teilton
       const h2Freq = findHarmonicPeak(dataArray, fundFreq * 2, nyquist, bufferLength);
       
       currentB = 0;
       if (h2Freq > 0) {
         const ratio = h2Freq / (2 * fundFreq);
-        currentB = (Math.pow(ratio, 2) - 1) / 4;
-        if (currentB < 0 || isNaN(currentB)) currentB = 0;
+        let tempB = (Math.pow(ratio, 2) - 1) / 4;
+        
+        // NEU: Plausibilitäts-Check für physikalische Inharmonizität
+        // Ein B-Wert unter 0.00001 oder über 0.01 ist messfehlerhaft oder Rauschen
+        if (!isNaN(tempB) && tempB >= 0.00001 && tempB <= 0.01) {
+            currentB = tempB;
+        }
       }
+
+      // UX: Speicherbutton nur aktivieren, wenn Inharmonizität erfolgreich gemessen wurde
+      saveBtn.disabled = (currentB === 0);
 
       const noteInfo = calculateTuning(fundFreq, a4Freq);
       currentKeyNum = noteInfo.keyNum;
@@ -285,7 +315,10 @@ function processAudio() {
         centsContainer.className = "cents-display cents-off";
       }
 
-      inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "0.00e+0";
+      // B-Wert oder Fehlermeldung anzeigen
+      inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Messfehler";
+      if(currentB === 0) inharmonicityEl.style.color = "#cf6679";
+      else inharmonicityEl.style.color = "#fff";
     }
 
     requestAnimationFrame(analyze);
@@ -295,7 +328,8 @@ function processAudio() {
 }
 
 function findHarmonicPeak(dataArray, targetFreq, nyquist, bufferLength) {
-  const searchRange = targetFreq * 0.04;
+  // Vergrößertes Suchfenster für tiefen Bass, wo die Abweichung größer ist
+  const searchRange = Math.max(targetFreq * 0.05, 5); // Mindestens 5 Hz Fenster
   const minBin = Math.floor(((targetFreq - searchRange) / nyquist) * bufferLength);
   const maxBin = Math.floor(((targetFreq + searchRange) / nyquist) * bufferLength);
   
@@ -309,7 +343,13 @@ function findHarmonicPeak(dataArray, targetFreq, nyquist, bufferLength) {
     }
   }
   
-  return peakBin !== -1 ? peakBin * (nyquist / bufferLength) : 0;
+  // NEU: Rausch-Schwellenwert - Teilton muss sich vom Hintergrundrauschen abheben
+  if (peakBin !== -1 && maxVol > -70) {
+    const exactBin = getInterpolatedPeakBin(dataArray, peakBin);
+    return exactBin * (nyquist / bufferLength);
+  }
+  
+  return 0; // Kein signifikanter 2. Teilton gefunden
 }
 
 function calculateTuning(freq, a4Freq) {
@@ -320,7 +360,7 @@ function calculateTuning(freq, a4Freq) {
   const keyNum = roundedNote - 20;
 
   // Verwende den geglätteten B-Wert aus dem globalen Modell
-  let globalB = 0.0003; // Standard-Fallback für durchschnittliches Klavier
+  let globalB = 0.0003; 
   if (keyNum >= 1 && keyNum <= 88) {
     globalB = smoothedB[keyNum - 1];
   }
@@ -356,7 +396,6 @@ function updateGlobalModel() {
   progressText.innerText = `${points.length} Messwerte gespeichert`;
 
   if (points.length >= 2) {
-    // Lineare Regression über log(B)
     let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
     const n = points.length;
 
@@ -374,7 +413,6 @@ function updateGlobalModel() {
       smoothedB[i] = Math.exp(intercept + slope * (i + 1));
     }
   } else {
-    // Standard-Spreizungsverlauf, wenn noch nicht genügend Daten da sind
     for (let i = 0; i < 88; i++) {
       smoothedB[i] = 0.0001 * Math.pow(1.03, 88 - (i + 1));
     }
@@ -386,7 +424,6 @@ function updateGlobalModel() {
 function drawGraph(points) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Raster zeichnen
   ctx.strokeStyle = '#222';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -394,7 +431,6 @@ function drawGraph(points) {
   ctx.lineTo(canvas.width, canvas.height / 2);
   ctx.stroke();
 
-  // 1. Geglättete Ausgleichskurve (Lila)
   ctx.strokeStyle = '#bb86fc';
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -409,7 +445,6 @@ function drawGraph(points) {
   }
   ctx.stroke();
 
-  // 2. Einzelne Messpunkte (Türkis)
   ctx.fillStyle = '#03dac6';
   pianoData.forEach((val, idx) => {
     if (val !== null && val > 0) {
