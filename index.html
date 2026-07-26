@@ -323,19 +323,36 @@ function processAudio() {
       }
 
       currentB = 0;
+      
+      // KORRIGIERTE LOGIK: Lineare Regression für exaktes Inharmonizitäts-Profil
       if (partials.length >= 2) {
-        let sumNum = 0, sumDen = 0;
-        let f1 = partials[0].freq;
+        let N = partials.length;
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
         for (let p of partials) {
-          if (p.n === 1) continue;
-          let ratio = p.freq / (p.n * f1);
-          let val = Math.pow(ratio, 2) - 1;
-          sumNum += val * Math.pow(p.n, 2);
-          sumDen += Math.pow(p.n, 4);
+          let x = p.n * p.n; // n^2
+          let y = (p.freq * p.freq) / (p.n * p.n); // f_n^2 / n^2
+
+          sumX += x;
+          sumY += y;
+          sumXY += x * y;
+          sumX2 += x * x;
         }
-        let calcB = sumNum / sumDen;
-        if (!isNaN(calcB) && calcB >= 0.000005 && calcB <= 0.02) {
-          currentB = calcB;
+
+        // Steigung (m) und Y-Achsenabschnitt (c) berechnen
+        let denominator = (N * sumX2) - (sumX * sumX);
+        if (denominator !== 0) {
+          let m = ((N * sumXY) - (sumX * sumY)) / denominator;
+          let c = (sumY - (m * sumX)) / N;
+
+          // B = Steigung / Y-Achsenabschnitt
+          if (c > 0 && m > 0) {
+            let calcB = m / c;
+            // Extremwerte abfangen (Toleranz bis 0.05 für höchsten Diskant erweitert)
+            if (!isNaN(calcB) && calcB >= 0.000005 && calcB <= 0.05) {
+              currentB = calcB;
+            }
+          }
         }
       }
 
@@ -373,6 +390,8 @@ function processAudio() {
 }
 
 function findPartialPeak(dataArray, targetFreq, nyquist, bufferLength) {
+  // Das Suchfenster bleibt ausreichend, da Abweichungen des Grundtons 
+  // typischerweise deutlich kleiner als 3% der Frequenz sind.
   const windowSize = Math.max(targetFreq * 0.03, 3);
   const minBin = Math.floor(((targetFreq - windowSize) / nyquist) * bufferLength);
   const maxBin = Math.floor(((targetFreq + windowSize) / nyquist) * bufferLength);
