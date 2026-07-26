@@ -141,7 +141,6 @@
   <div class="note-display" id="note">--</div>
   <div class="freq-display"><span id="freq">0.00</span> Hz</div>
   
-  <!-- Stroboskop Indikator -->
   <div class="strobe-container">
     <canvas id="strobeCanvas" width="440" height="40"></canvas>
   </div>
@@ -219,22 +218,34 @@ startBtn.addEventListener('click', async () => {
   if (isListening) return;
 
   try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    
-    // PROFESSIONELL: Erzwinge rohes Audiosignal ohne jegliche Browser-Filter
+    // 1. Mikrofon-Stream ohne browserinterne Filterung & latencyHint anfragen
     const stream = await navigator.mediaDevices.getUserMedia({ 
       audio: {
         echoCancellation: false,
         autoGainControl: false,
-        noiseSuppression: false,
-        latencyHint: 'interactive'
+        noiseSuppression: false
       }, 
       video: false 
     });
     
+    // 2. AudioContext explizit mit latencyHint für interaktive Nutzung erstellen
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    
+    // 3. Wenn der Context durch das Berechtigungs-Popup pausiert wurde, aufwecken
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+    
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 32768; // Maximale FFT-Auflösung für tiefen Bass
-    analyser.smoothingTimeConstant = 0.05; // Sofortige Erkennung ohne Verzögerung
+    
+    // Fallback für Browser/Geräte, die max. 16384 bei FFT erlauben (z.B. einige Safari-Versionen)
+    try {
+      analyser.fftSize = 32768; 
+    } catch(e) {
+      analyser.fftSize = 16384; 
+    }
+    
+    analyser.smoothingTimeConstant = 0.05; 
     
     microphone = audioCtx.createMediaStreamSource(stream);
     microphone.connect(analyser);
@@ -298,7 +309,8 @@ function processAudio() {
       }
     }
 
-    if (maxVolume > -50 && bestBin !== -1) {
+    // Verbesserter Schwellenwert: -75 dB (erkennt Töne verlässlicher als -50 dB)
+    if (maxVolume > -75 && bestBin !== -1) {
       const exactPeakBin = getInterpolatedPeakBin(dataArray, bestBin);
       const fundFreq = exactPeakBin * (nyquist / bufferLength);
       const a4Freq = parseFloat(a4Input.value) || 440;
@@ -311,7 +323,7 @@ function processAudio() {
         if (found > 0) partials.push({n: n, freq: found});
       }
 
-      // Lineare Regression zur Bestimmung von B über mehrere Teiltöne: (f_n / (n*f_1))^2 - 1 = B * n^2
+      // Lineare Regression zur Bestimmung von B über mehrere Teiltöne
       currentB = 0;
       if (partials.length >= 2) {
         let sumNum = 0, sumDen = 0;
@@ -377,7 +389,8 @@ function findPartialPeak(dataArray, targetFreq, nyquist, bufferLength) {
     }
   }
   
-  if (peakBin !== -1 && maxVol > -65) {
+  // Verbesserter Schwellenwert für Obertöne (-85 dB statt -65 dB)
+  if (peakBin !== -1 && maxVol > -85) {
     return getInterpolatedPeakBin(dataArray, peakBin) * (nyquist / bufferLength);
   }
   return 0;
@@ -459,10 +472,9 @@ function updateGlobalModel() {
       smoothedB[i] = Math.exp(intercept + slope * (i + 1));
     }
   } else {
-    // Akustisch fundiertes Standard-Modell für ein Standard-Klavier, wenn noch keine Messwerte da sind
+    // Akustisch fundiertes Standard-Modell für ein Standard-Klavier
     for (let i = 0; i < 88; i++) {
       let key = i + 1;
-      // Diskant hat steilere Inharmonizität als Bass
       smoothedB[i] = 0.0002 * Math.pow(1.025, 88 - key) + 0.00005;
     }
   }
