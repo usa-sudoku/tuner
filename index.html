@@ -167,24 +167,25 @@
 
   <button id="saveBtn" class="btn-save" disabled>2. Ton für Stimmkurve speichern</button>
 
-  <div class="section-title">Inharmonizitäts-Profil (Multi-Partial Fit)</div>
+  <div class="section-title">Inharmonizitäts-Profil (Robust Fit)</div>
   <canvas id="curveCanvas" width="400" height="120"></canvas>
   <div class="progress-bar" id="progressText">0 / 88 Tasten eingemessen</div>
   
   <div class="legend">
     <span class="legend-dots">Messpunkte</span>
-    <span class="legend-line">Interpolierte Kurve</span>
+    <span class="legend-line">Wannen-Modell (Adaptiv)</span>
   </div>
 
   <button id="clearBtn" class="btn-clear">Werksspeicher löschen</button>
 </div>
 
 <script>
-let audioCtx, analyser, microphone;
+let audioCtx, analyserFreq, analyserTime, microphone;
 let isListening = false;
 let currentKeyNum = null;
+let lastKeyNum = null;
 let currentB = 0;
-let bHistory = []; // Filter-Array für stabile B-Werte
+let bHistory = [];
 let strobePhase = 0;
 
 let pianoData = JSON.parse(localStorage.getItem('piano_pro_raw')) || new Array(88).fill(null);
@@ -226,20 +227,25 @@ startBtn.addEventListener('click', async () => {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     if (audioCtx.state === 'suspended') await audioCtx.resume();
     
-    analyser = audioCtx.createAnalyser();
-    
-    let maxFftSize = 262144; // 262144 ist in fast allen Browsern das Maximum für WebAudio API
+    // Analysator 1: Frequenz-Domäne (Hohe Auflösung für Obertöne)
+    analyserFreq = audioCtx.createAnalyser();
+    let maxFftSize = 262144;
     while (maxFftSize >= 32) {
       try {
-        analyser.fftSize = maxFftSize;
+        analyserFreq.fftSize = maxFftSize;
         break; 
       } catch (e) { maxFftSize /= 2; }
     }
-    
-    analyser.smoothingTimeConstant = 0.2; // Etwas mehr Smoothing für Stabilität
+    analyserFreq.smoothingTimeConstant = 0.2;
+
+    // Analysator 2: Zeit-Domäne (Schnelle Puffer für Autokorrelation/YIN im Bass)
+    analyserTime = audioCtx.createAnalyser();
+    analyserTime.fftSize = 16384; // Genug für Frequenzen ab ~15 Hz
+    analyserTime.smoothingTimeConstant = 0;
 
     microphone = audioCtx.createMediaStreamSource(stream);
-    microphone.connect(analyser);
+    microphone.connect(analyserFreq);
+    microphone.connect(analyserTime);
 
     isListening = true;
     startBtn.innerText = "Pro-Analysator aktiv";
@@ -257,7 +263,6 @@ saveBtn.addEventListener('click', () => {
     pianoData[currentKeyNum - 1] = currentB;
     localStorage.setItem('piano_pro_raw', JSON.stringify(pianoData));
     updateGlobalModel();
-    bHistory = []; // Historie leeren nach Speichern
   }
 });
 
@@ -269,7 +274,6 @@ clearBtn.addEventListener('click', () => {
   }
 });
 
-// Parabolische Interpolation für exakte Frequenz zwischen den Bins (Log-Scale)
 function getInterpolatedPeakBin(dataArray, bin) {
   if (bin <= 0 || bin >= dataArray.length - 1) return bin;
   const y1 = dataArray[bin - 1];
@@ -279,124 +283,199 @@ function getInterpolatedPeakBin(dataArray, bin) {
   return bin + p;
 }
 
-// Helferfunktion für den Median
 function getMedian(arr) {
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+// YIN Pitch Detection (Autokorrelation) - Beseitigt den Oktavfehler im Bass
+function getPitchYIN(buffer, sampleRate) {
+  const minFreq = 25; 
+  const maxFreq = 4500; 
+  const W = Math.floor(buffer.length / 2);
+  const minTau = Math.max(2, Math.floor(sampleRate / maxFreq));
+  const maxTau = Math.min(W, Math.ceil(sampleRate / minFreq));
+  
+  let yinBuffer = new Float32Array(maxTau + 1);
+  
+  // Step 1: Difference function
+  for (let t = 1; t <= maxTau; t++) {
+    let sum = 0;
+    for (let i = 0; i < W; i++) {
+      let delta = buffer[i] - buffer[i + t];
+      sum += delta * delta;
+    }
+    yinBuffer[t] = sum;
+  }
+  
+  // Step 2: Cumulative mean normalized difference
+  yinBuffer[0] = 1;
+  let runningSum = 0;
+  let tauEstimate = -1;
+  const threshold = 0.15;
+  
+  for (let t = 1; t <= maxTau; t++) {
+    runningSum += yinBuffer[t];
+    yinBuffer[t] = yinBuffer[t] * t / runningSum;
+    
+    // Step 3: Absolute threshold
+    if (t >= minTau) {
+      if (yinBuffer[t] < threshold) {
+        while (t + 1 <= maxTau && yinBuffer[t + 1] < yinBuffer[t]) {
+          t++;
+        }
+        tauEstimate = t;
+        break;
+      }
+    }
+  }
+  
+  // Fallback to global minimum
+  if (tauEstimate === -1) {
+    let minVal = Infinity;
+    for (let t = minTau; t <= maxTau; t++) {
+      if (yinBuffer[t] < minVal) {
+        minVal = yinBuffer[t];
+        tauEstimate = t;
+      }
+    }
+  }
+  
+  // Step 4: Parabolic interpolation
+  if (tauEstimate > 0 && tauEstimate < maxTau) {
+    let s0 = yinBuffer[tauEstimate - 1];
+    let s1 = yinBuffer[tauEstimate];
+    let s2 = yinBuffer[tauEstimate + 1];
+    let denominator = 2 * (s0 + s2 - 2 * s1);
+    if (denominator !== 0) {
+      tauEstimate += (s0 - s2) / denominator;
+    }
+  }
+  
+  if (tauEstimate > 0) return sampleRate / tauEstimate;
+  return -1;
+}
+
 function processAudio() {
-  const bufferLength = analyser.frequencyBinCount;
-  const dataArray = new Float32Array(bufferLength);
+  const bufferLengthFreq = analyserFreq.frequencyBinCount;
+  const dataArrayFreq = new Float32Array(bufferLengthFreq);
+  
+  const bufferLengthTime = analyserTime.fftSize;
+  const dataArrayTime = new Float32Array(bufferLengthTime);
   
   function analyze() {
     if (!isListening) return;
-    analyser.getFloatFrequencyData(dataArray);
     
-    let maxVolume = -Infinity;
-    let bestBin = -1;
-    const nyquist = audioCtx.sampleRate / 2;
-    const hzPerBin = nyquist / bufferLength;
+    analyserTime.getFloatTimeDomainData(dataArrayTime);
     
-    const minBin = Math.floor(27.5 / hzPerBin);
-    const maxBin = Math.floor(4200 / hzPerBin);
-
-    // 1. Finde den lautesten Peak
-    for (let i = minBin; i < maxBin; i++) {
-      if (dataArray[i] > maxVolume) {
-        maxVolume = dataArray[i];
-        bestBin = i;
-      }
+    // Noise Gate Check
+    let rms = 0;
+    for (let i = 0; i < bufferLengthTime; i++) {
+      rms += dataArrayTime[i] * dataArrayTime[i];
     }
+    rms = Math.sqrt(rms / bufferLengthTime);
 
-    if (maxVolume > -75 && bestBin !== -1) {
+    if (rms > 0.005) {
+      const sampleRate = audioCtx.sampleRate;
+      const yinF0 = getPitchYIN(dataArrayTime, sampleRate);
       
-      // 2. KORREKTUR: "Missing Fundamental" Check.
-      // Ist der lauteste Peak eigentlich der 2. oder 3. Oberton?
-      let fundBin = bestBin;
-      for (let div = 4; div >= 2; div--) {
-        let subBin = Math.round(bestBin / div);
-        if (subBin > 0 && dataArray[subBin] > maxVolume - 20) { // Sub-Peak existiert stark genug
-            // Überprüfe ob es ein lokales Maximum ist
-            if (dataArray[subBin] > dataArray[subBin-1] && dataArray[subBin] > dataArray[subBin+1]) {
-                fundBin = subBin;
-                break; 
-            }
-        }
-      }
-
-      const exactPeakBin = getInterpolatedPeakBin(dataArray, fundBin);
-      const fundFreq = exactPeakBin * hzPerBin;
-      const a4Freq = parseFloat(a4Input.value) || 440;
-      
-      let partials = [{n: 1, freq: fundFreq, vol: dataArray[fundBin]}];
-      
-      // 3. Obertöne suchen (mit Inharmonizitäts-Toleranz nach oben)
-      for (let n = 2; n <= 8; n++) {
-        let expected = fundFreq * n;
-        if (expected > nyquist * 0.8) break; // Nicht über Nyquist Grenze suchen
+      if (yinF0 !== -1 && yinF0 > 25 && yinF0 < 4500) {
+        analyserFreq.getFloatFrequencyData(dataArrayFreq);
+        const nyquist = sampleRate / 2;
+        const hzPerBin = nyquist / bufferLengthFreq;
         
-        let found = findPartialPeak(dataArray, expected, hzPerBin);
-        if (found) partials.push({n: n, freq: found.freq, vol: found.vol});
-      }
-
-      // 4. Regression für B nur rechnen, wenn wir min. 3 Partials haben (stabiler)
-      let calcB = 0;
-      if (partials.length >= 3) {
-        let N = partials.length;
-        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-
-        for (let p of partials) {
-          let x = p.n * p.n; // n^2
-          let y = (p.freq * p.freq) / (p.n * p.n); // f_n^2 / n^2
-
-          sumX += x;
-          sumY += y;
-          sumXY += x * y;
-          sumX2 += x * x;
+        // YIN gibt den exakten Grundton (eliminiert Oktavfehler). 
+        // Für absolute Cent-Präzision suchen wir den f0-Peak im High-Res FFT.
+        // Fehlt der Grundton im Bass physikalisch, fallback auf den YIN-Wert.
+        let tuningFreq = yinF0;
+        let partial1 = findPartialPeak(dataArrayFreq, yinF0 * 0.98, yinF0 * 1.02, hzPerBin);
+        if (partial1 && partial1.vol > -85) {
+          tuningFreq = partial1.freq;
         }
 
-        let denominator = (N * sumX2) - (sumX * sumX);
-        if (denominator !== 0) {
-          let m = ((N * sumXY) - (sumX * sumY)) / denominator;
-          let c = (sumY - (m * sumX)) / N;
+        const a4Freq = parseFloat(a4Input.value) || 440;
+        const noteInfo = calculateTuning(tuningFreq, a4Freq);
+        currentKeyNum = noteInfo.keyNum;
 
-          if (c > 0 && m > 0) {
-            calcB = m / c;
+        // Clean Cut: Puffer bei Tonwechsel leeren
+        if (lastKeyNum !== null && currentKeyNum !== lastKeyNum) {
+          bHistory = [];
+        }
+        lastKeyNum = currentKeyNum;
+
+        let partials = [];
+        if (partial1) partials.push({n: 1, freq: tuningFreq, vol: partial1.vol});
+        
+        // Empirische Suche der Obertöne auf Basis des erkannten f0
+        for (let n = 2; n <= 8; n++) {
+          let harmonicNominal = tuningFreq * n; 
+          if (harmonicNominal > nyquist * 0.9) break; 
+          
+          let minHz = harmonicNominal * 0.98;
+          let maxHz = harmonicNominal * (1 + 0.0015 * n * n + 0.02);
+          
+          let found = findPartialPeak(dataArrayFreq, minHz, maxHz, hzPerBin);
+          if (found) partials.push({n: n, freq: found.freq, vol: found.vol});
+        }
+
+        // B-Wert Berechnung über Least-Squares
+        let calcB = 0;
+        if (partials.length >= 3) {
+          let N = partials.length;
+          let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+          for (let p of partials) {
+            let x = p.n * p.n;
+            let y = (p.freq * p.freq) / (p.n * p.n);
+
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+          }
+
+          let denominator = (N * sumX2) - (sumX * sumX);
+          if (denominator !== 0) {
+            let m = ((N * sumXY) - (sumX * sumY)) / denominator;
+            let c = (sumY - (m * sumX)) / N;
+
+            if (c > 0 && m > 0) {
+              calcB = m / c;
+            }
           }
         }
+
+        if (calcB >= 0.000005 && calcB <= 0.08) {
+          bHistory.push(calcB);
+          if (bHistory.length > 60) bHistory.shift(); 
+        }
+
+        currentB = bHistory.length >= 5 ? getMedian(bHistory) : 0;
+        saveBtn.disabled = (currentB === 0);
+
+        noteEl.innerText = noteInfo.note;
+        freqEl.innerText = tuningFreq.toFixed(2);
+        pureTargetEl.innerText = noteInfo.pureTarget.toFixed(2) + " Hz";
+        stretchedTargetEl.innerText = noteInfo.stretchedTarget.toFixed(2) + " Hz";
+        
+        centsEl.innerText = (noteInfo.cents >= 0 ? "+" : "") + noteInfo.cents.toFixed(1) + " Cts";
+        stretchCentsEl.innerText = (noteInfo.stretchCents >= 0 ? "+" : "") + noteInfo.stretchCents.toFixed(1) + " Cts";
+        
+        centsContainer.className = Math.abs(noteInfo.cents) <= 1.5 ? "cents-display cents-perfect" : "cents-display cents-off";
+
+        inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Liest Partials...";
+        inharmonicityEl.style.color = currentB > 0 ? "#00fabd" : "#ffb4ab";
+
+        drawStrobe(noteInfo.cents);
+      } else {
+        bHistory = [];
+        lastKeyNum = null;
+        drawStrobe(0, true);
       }
-
-      // 5. B-Wert glätten (Median-Filter über Zeit)
-      if (calcB >= 0.000005 && calcB <= 0.08) {
-        bHistory.push(calcB);
-        if (bHistory.length > 20) bHistory.shift();
-      }
-
-      currentB = bHistory.length >= 5 ? getMedian(bHistory) : 0;
-      saveBtn.disabled = (currentB === 0);
-
-      // UI Updates
-      const noteInfo = calculateTuning(fundFreq, a4Freq);
-      currentKeyNum = noteInfo.keyNum;
-
-      noteEl.innerText = noteInfo.note;
-      freqEl.innerText = fundFreq.toFixed(2);
-      pureTargetEl.innerText = noteInfo.pureTarget.toFixed(2) + " Hz";
-      stretchedTargetEl.innerText = noteInfo.stretchedTarget.toFixed(2) + " Hz";
-      
-      centsEl.innerText = (noteInfo.cents >= 0 ? "+" : "") + noteInfo.cents.toFixed(1) + " Cts";
-      stretchCentsEl.innerText = (noteInfo.stretchCents >= 0 ? "+" : "") + noteInfo.stretchCents.toFixed(1) + " Cts";
-      
-      centsContainer.className = Math.abs(noteInfo.cents) <= 1.5 ? "cents-display cents-perfect" : "cents-display cents-off";
-
-      inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Liest Partials...";
-      inharmonicityEl.style.color = currentB > 0 ? "#00fabd" : "#ffb4ab";
-
-      drawStrobe(noteInfo.cents);
     } else {
-      bHistory = []; // Reset bei Stille
+      bHistory = [];
+      lastKeyNum = null;
       drawStrobe(0, true); 
     }
 
@@ -405,17 +484,14 @@ function processAudio() {
   analyze();
 }
 
-// Verbesserte Suchfunktion für Obertöne (Lokale Maxima)
-function findPartialPeak(dataArray, targetFreq, hzPerBin) {
-  // Asymmetrisches Fenster: Obertöne werden durch Inharmonizität schärfer (+6%), selten tiefer (-1.5%)
-  const minBin = Math.floor((targetFreq * 0.985) / hzPerBin);
-  const maxBin = Math.ceil((targetFreq * 1.06) / hzPerBin);
+function findPartialPeak(dataArray, minHz, maxHz, hzPerBin) {
+  const minBin = Math.max(1, Math.floor(minHz / hzPerBin));
+  const maxBin = Math.min(dataArray.length - 2, Math.ceil(maxHz / hzPerBin));
   
   let maxVol = -Infinity;
   let peakBin = -1;
   
   for (let i = minBin; i <= maxBin; i++) {
-    // Es MUSS ein lokales Maximum sein (kleiner Hügel)
     if (dataArray[i] > dataArray[i-1] && dataArray[i] > dataArray[i+1]) {
         if (dataArray[i] > maxVol) {
           maxVol = dataArray[i];
@@ -424,14 +500,13 @@ function findPartialPeak(dataArray, targetFreq, hzPerBin) {
     }
   }
   
-  if (peakBin !== -1 && maxVol > -90) { // Muss über Rauschen liegen
+  if (peakBin !== -1 && maxVol > -90) { 
     const exactBin = getInterpolatedPeakBin(dataArray, peakBin);
     return { freq: exactBin * hzPerBin, vol: maxVol };
   }
   return null;
 }
 
-// Korrigierte kumulative Berechnung der Spreizung
 function calculateTuning(freq, a4Freq) {
   const noteNum = 12 * (Math.log(freq / a4Freq) / Math.log(2)) + 69;
   const roundedNote = Math.round(noteNum);
@@ -443,11 +518,8 @@ function calculateTuning(freq, a4Freq) {
     globalB = smoothedB[keyNum - 1] || 0.0004;
   }
 
-  // Korrekte kumulative Railsback-Spreizung
-  const pivotKey = 49; // A4
+  const pivotKey = 49; 
   const stretchFactorPerOctave = Math.sqrt(1 + globalB * 4); 
-  
-  // Verteilt die Oktav-Spreizung mathematisch über die Halbtöne Distanz zu A4
   const distanceInOctaves = (keyNum - pivotKey) / 12;
   const cumulativeStretch = Math.pow(stretchFactorPerOctave, distanceInOctaves);
   
@@ -459,14 +531,7 @@ function calculateTuning(freq, a4Freq) {
   const noteIndex = (roundedNote % 12 + 12) % 12;
   const octave = Math.floor(roundedNote / 12) - 1;
   
-  return {
-    keyNum,
-    note: NOTE_NAMES[noteIndex] + octave,
-    pureTarget,
-    stretchedTarget,
-    cents,
-    stretchCents
-  };
+  return { keyNum, note: NOTE_NAMES[noteIndex] + octave, pureTarget, stretchedTarget, cents, stretchCents };
 }
 
 function drawStrobe(cents, idle = false) {
@@ -485,7 +550,6 @@ function drawStrobe(cents, idle = false) {
   }
 }
 
-// Interpolations-Modell bleibt unangetastet (war super)
 function updateGlobalModel() {
   const points = [];
   pianoData.forEach((val, idx) => {
@@ -495,49 +559,38 @@ function updateGlobalModel() {
   const validCount = points.length;
   progressText.innerText = `${validCount} / 88 Tasten eingemessen`;
 
-  if (validCount === 0) {
-    for (let i = 0; i < 88; i++) {
-      let key = i + 1;
-      smoothedB[i] = key < 40 
-        ? 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2)
-        : 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
-    }
-  } else if (validCount === 1) {
-    const single = points[0];
-    let defaultB = single.key < 40 
-      ? 0.00015 + 0.0015 * Math.pow((40 - single.key) / 40, 2)
-      : 0.00015 + 0.0035 * Math.pow((single.key - 40) / 48, 3);
+  for (let i = 0; i < 88; i++) {
+    let key = i + 1;
     
-    const ratio = single.b / defaultB;
-    for (let i = 0; i < 88; i++) {
-      let key = i + 1;
-      let baseB = key < 40 
-        ? 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2)
-        : 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
-      smoothedB[i] = baseB * ratio;
-    }
-  } else {
-    points.sort((a, b) => a.key - b.key);
-    for (let i = 0; i < 88; i++) {
-      let key = i + 1;
-      if (key <= points[0].key) {
-        let p1 = points[0], p2 = points[1];
-        let slope = (Math.log(p2.b) - Math.log(p1.b)) / (p2.key - p1.key);
-        smoothedB[i] = Math.exp(Math.log(p1.b) + slope * (key - p1.key));
-      } else if (key >= points[points.length - 1].key) {
-        let p1 = points[points.length - 2], p2 = points[points.length - 1];
-        let slope = (Math.log(p2.b) - Math.log(p1.b)) / (p2.key - p1.key);
-        smoothedB[i] = Math.exp(Math.log(p2.b) + slope * (key - p2.key));
-      } else {
-        for (let j = 0; j < points.length - 1; j++) {
-          if (key >= points[j].key && key <= points[j + 1].key) {
-            let p1 = points[j], p2 = points[j + 1];
-            let t = (key - p1.key) / (p2.key - p1.key);
-            smoothedB[i] = Math.exp(Math.log(p1.b) * (1 - t) + Math.log(p2.b) * t);
-            break;
-          }
-        }
-      }
+    let baseB = 0.00015;
+    if (key < 40) baseB += 0.002 * Math.pow((40 - key) / 40, 2.5);
+    if (key > 40) baseB += 0.004 * Math.pow((key - 40) / 48, 3);
+
+    if (validCount === 0) {
+      smoothedB[i] = baseB;
+    } else {
+      let numerator = 0;
+      let denominator = 0.0001; 
+      const sigma = 8.0;
+
+      points.forEach(p => {
+        let dist = key - p.key;
+        let weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+        
+        let pBaseB = 0.00015;
+        if (p.key < 40) pBaseB += 0.002 * Math.pow((40 - p.key) / 40, 2.5);
+        if (p.key > 40) pBaseB += 0.004 * Math.pow((p.key - 40) / 48, 3);
+        
+        let measuredRatio = p.b / pBaseB;
+        numerator += weight * measuredRatio;
+        denominator += weight;
+      });
+
+      let ratio = numerator / denominator;
+      let confidence = Math.min(1.0, denominator / 1.5); 
+      let finalRatio = confidence * ratio + (1 - confidence) * 1.0;
+
+      smoothedB[i] = baseB * finalRatio;
     }
   }
   drawGraph(points);
