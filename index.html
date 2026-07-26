@@ -72,7 +72,6 @@
     .note-display { font-size: 2.8rem; font-weight: 800; color: #fff; margin: 0; line-height: 1; }
     .freq-display { font-size: 1rem; color: #00fabd; margin-bottom: 4px; }
     
-    /* Stroboskop Canvas für ultra-präzises Tuning */
     .strobe-container {
       margin: 8px 0;
       background: #000;
@@ -185,6 +184,7 @@ let audioCtx, analyser, microphone;
 let isListening = false;
 let currentKeyNum = null;
 let currentB = 0;
+let bHistory = []; // Filter-Array für stabile B-Werte
 let strobePhase = 0;
 
 let pianoData = JSON.parse(localStorage.getItem('piano_pro_raw')) || new Array(88).fill(null);
@@ -219,34 +219,24 @@ startBtn.addEventListener('click', async () => {
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ 
-      audio: {
-        echoCancellation: false,
-        autoGainControl: false,
-        noiseSuppression: false
-      }, 
+      audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: false }, 
       video: false 
     });
     
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
-    
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume();
-    }
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
     
     analyser = audioCtx.createAnalyser();
     
-    let maxFftSize = 262144; 
+    let maxFftSize = 262144; // 262144 ist in fast allen Browsern das Maximum für WebAudio API
     while (maxFftSize >= 32) {
       try {
         analyser.fftSize = maxFftSize;
-        console.log("Maximale FFT-Auflösung aktiviert:", analyser.fftSize);
         break; 
-      } catch (e) {
-        maxFftSize /= 2; 
-      }
+      } catch (e) { maxFftSize /= 2; }
     }
     
-    analyser.smoothingTimeConstant = 0.05; 
+    analyser.smoothingTimeConstant = 0.2; // Etwas mehr Smoothing für Stabilität
 
     microphone = audioCtx.createMediaStreamSource(stream);
     microphone.connect(analyser);
@@ -267,6 +257,7 @@ saveBtn.addEventListener('click', () => {
     pianoData[currentKeyNum - 1] = currentB;
     localStorage.setItem('piano_pro_raw', JSON.stringify(pianoData));
     updateGlobalModel();
+    bHistory = []; // Historie leeren nach Speichern
   }
 });
 
@@ -278,6 +269,7 @@ clearBtn.addEventListener('click', () => {
   }
 });
 
+// Parabolische Interpolation für exakte Frequenz zwischen den Bins (Log-Scale)
 function getInterpolatedPeakBin(dataArray, bin) {
   if (bin <= 0 || bin >= dataArray.length - 1) return bin;
   const y1 = dataArray[bin - 1];
@@ -287,22 +279,30 @@ function getInterpolatedPeakBin(dataArray, bin) {
   return bin + p;
 }
 
+// Helferfunktion für den Median
+function getMedian(arr) {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 function processAudio() {
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Float32Array(bufferLength);
   
   function analyze() {
     if (!isListening) return;
-    
     analyser.getFloatFrequencyData(dataArray);
     
     let maxVolume = -Infinity;
     let bestBin = -1;
     const nyquist = audioCtx.sampleRate / 2;
+    const hzPerBin = nyquist / bufferLength;
     
-    const minBin = Math.floor((27.5 / nyquist) * bufferLength);
-    const maxBin = Math.floor((4200 / nyquist) * bufferLength);
+    const minBin = Math.floor(27.5 / hzPerBin);
+    const maxBin = Math.floor(4200 / hzPerBin);
 
+    // 1. Finde den lautesten Peak
     for (let i = minBin; i < maxBin; i++) {
       if (dataArray[i] > maxVolume) {
         maxVolume = dataArray[i];
@@ -311,21 +311,39 @@ function processAudio() {
     }
 
     if (maxVolume > -75 && bestBin !== -1) {
-      const exactPeakBin = getInterpolatedPeakBin(dataArray, bestBin);
-      const fundFreq = exactPeakBin * (nyquist / bufferLength);
-      const a4Freq = parseFloat(a4Input.value) || 440;
       
-      let partials = [{n: 1, freq: fundFreq}];
-      for (let n = 2; n <= 5; n++) {
-        let expected = fundFreq * n;
-        let found = findPartialPeak(dataArray, expected, nyquist, bufferLength);
-        if (found > 0) partials.push({n: n, freq: found});
+      // 2. KORREKTUR: "Missing Fundamental" Check.
+      // Ist der lauteste Peak eigentlich der 2. oder 3. Oberton?
+      let fundBin = bestBin;
+      for (let div = 4; div >= 2; div--) {
+        let subBin = Math.round(bestBin / div);
+        if (subBin > 0 && dataArray[subBin] > maxVolume - 20) { // Sub-Peak existiert stark genug
+            // Überprüfe ob es ein lokales Maximum ist
+            if (dataArray[subBin] > dataArray[subBin-1] && dataArray[subBin] > dataArray[subBin+1]) {
+                fundBin = subBin;
+                break; 
+            }
+        }
       }
 
-      currentB = 0;
+      const exactPeakBin = getInterpolatedPeakBin(dataArray, fundBin);
+      const fundFreq = exactPeakBin * hzPerBin;
+      const a4Freq = parseFloat(a4Input.value) || 440;
       
-      // KORRIGIERTE LOGIK: Lineare Regression für exaktes Inharmonizitäts-Profil
-      if (partials.length >= 2) {
+      let partials = [{n: 1, freq: fundFreq, vol: dataArray[fundBin]}];
+      
+      // 3. Obertöne suchen (mit Inharmonizitäts-Toleranz nach oben)
+      for (let n = 2; n <= 8; n++) {
+        let expected = fundFreq * n;
+        if (expected > nyquist * 0.8) break; // Nicht über Nyquist Grenze suchen
+        
+        let found = findPartialPeak(dataArray, expected, hzPerBin);
+        if (found) partials.push({n: n, freq: found.freq, vol: found.vol});
+      }
+
+      // 4. Regression für B nur rechnen, wenn wir min. 3 Partials haben (stabiler)
+      let calcB = 0;
+      if (partials.length >= 3) {
         let N = partials.length;
         let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
 
@@ -339,25 +357,27 @@ function processAudio() {
           sumX2 += x * x;
         }
 
-        // Steigung (m) und Y-Achsenabschnitt (c) berechnen
         let denominator = (N * sumX2) - (sumX * sumX);
         if (denominator !== 0) {
           let m = ((N * sumXY) - (sumX * sumY)) / denominator;
           let c = (sumY - (m * sumX)) / N;
 
-          // B = Steigung / Y-Achsenabschnitt
           if (c > 0 && m > 0) {
-            let calcB = m / c;
-            // Extremwerte abfangen (Toleranz bis 0.05 für höchsten Diskant erweitert)
-            if (!isNaN(calcB) && calcB >= 0.000005 && calcB <= 0.05) {
-              currentB = calcB;
-            }
+            calcB = m / c;
           }
         }
       }
 
+      // 5. B-Wert glätten (Median-Filter über Zeit)
+      if (calcB >= 0.000005 && calcB <= 0.08) {
+        bHistory.push(calcB);
+        if (bHistory.length > 20) bHistory.shift();
+      }
+
+      currentB = bHistory.length >= 5 ? getMedian(bHistory) : 0;
       saveBtn.disabled = (currentB === 0);
 
+      // UI Updates
       const noteInfo = calculateTuning(fundFreq, a4Freq);
       currentKeyNum = noteInfo.keyNum;
 
@@ -369,49 +389,49 @@ function processAudio() {
       centsEl.innerText = (noteInfo.cents >= 0 ? "+" : "") + noteInfo.cents.toFixed(1) + " Cts";
       stretchCentsEl.innerText = (noteInfo.stretchCents >= 0 ? "+" : "") + noteInfo.stretchCents.toFixed(1) + " Cts";
       
-      if (Math.abs(noteInfo.cents) <= 1.5) {
-        centsContainer.className = "cents-display cents-perfect";
-      } else {
-        centsContainer.className = "cents-display cents-off";
-      }
+      centsContainer.className = Math.abs(noteInfo.cents) <= 1.5 ? "cents-display cents-perfect" : "cents-display cents-off";
 
-      inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Unstabil";
-      inharmonicityEl.style.color = currentB > 0 ? "#fff" : "#ffb4ab";
+      inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Liest Partials...";
+      inharmonicityEl.style.color = currentB > 0 ? "#00fabd" : "#ffb4ab";
 
       drawStrobe(noteInfo.cents);
     } else {
+      bHistory = []; // Reset bei Stille
       drawStrobe(0, true); 
     }
 
     requestAnimationFrame(analyze);
   }
-  
   analyze();
 }
 
-function findPartialPeak(dataArray, targetFreq, nyquist, bufferLength) {
-  // Das Suchfenster bleibt ausreichend, da Abweichungen des Grundtons 
-  // typischerweise deutlich kleiner als 3% der Frequenz sind.
-  const windowSize = Math.max(targetFreq * 0.03, 3);
-  const minBin = Math.floor(((targetFreq - windowSize) / nyquist) * bufferLength);
-  const maxBin = Math.floor(((targetFreq + windowSize) / nyquist) * bufferLength);
+// Verbesserte Suchfunktion für Obertöne (Lokale Maxima)
+function findPartialPeak(dataArray, targetFreq, hzPerBin) {
+  // Asymmetrisches Fenster: Obertöne werden durch Inharmonizität schärfer (+6%), selten tiefer (-1.5%)
+  const minBin = Math.floor((targetFreq * 0.985) / hzPerBin);
+  const maxBin = Math.ceil((targetFreq * 1.06) / hzPerBin);
   
   let maxVol = -Infinity;
   let peakBin = -1;
   
   for (let i = minBin; i <= maxBin; i++) {
-    if (dataArray[i] > maxVol) {
-      maxVol = dataArray[i];
-      peakBin = i;
+    // Es MUSS ein lokales Maximum sein (kleiner Hügel)
+    if (dataArray[i] > dataArray[i-1] && dataArray[i] > dataArray[i+1]) {
+        if (dataArray[i] > maxVol) {
+          maxVol = dataArray[i];
+          peakBin = i;
+        }
     }
   }
   
-  if (peakBin !== -1 && maxVol > -85) {
-    return getInterpolatedPeakBin(dataArray, peakBin) * (nyquist / bufferLength);
+  if (peakBin !== -1 && maxVol > -90) { // Muss über Rauschen liegen
+    const exactBin = getInterpolatedPeakBin(dataArray, peakBin);
+    return { freq: exactBin * hzPerBin, vol: maxVol };
   }
-  return 0;
+  return null;
 }
 
+// Korrigierte kumulative Berechnung der Spreizung
 function calculateTuning(freq, a4Freq) {
   const noteNum = 12 * (Math.log(freq / a4Freq) / Math.log(2)) + 69;
   const roundedNote = Math.round(noteNum);
@@ -423,16 +443,15 @@ function calculateTuning(freq, a4Freq) {
     globalB = smoothedB[keyNum - 1] || 0.0004;
   }
 
-  // Korrekte physikalische Oktavspreizung mit Pivot bei A4 (Taste 49)
-  const pivotKey = 49;
-  const stretchFactor = Math.sqrt(1 + globalB * 4);
-  let stretchedTarget;
+  // Korrekte kumulative Railsback-Spreizung
+  const pivotKey = 49; // A4
+  const stretchFactorPerOctave = Math.sqrt(1 + globalB * 4); 
   
-  if (keyNum >= pivotKey) {
-    stretchedTarget = pureTarget * stretchFactor; // Diskant: Nach oben spreizen
-  } else {
-    stretchedTarget = pureTarget / stretchFactor; // Bass: Nach unten spreizen
-  }
+  // Verteilt die Oktav-Spreizung mathematisch über die Halbtöne Distanz zu A4
+  const distanceInOctaves = (keyNum - pivotKey) / 12;
+  const cumulativeStretch = Math.pow(stretchFactorPerOctave, distanceInOctaves);
+  
+  const stretchedTarget = pureTarget * cumulativeStretch;
   
   const cents = 1200 * (Math.log(freq / stretchedTarget) / Math.log(2));
   const stretchCents = 1200 * (Math.log(stretchedTarget / pureTarget) / Math.log(2));
@@ -441,12 +460,12 @@ function calculateTuning(freq, a4Freq) {
   const octave = Math.floor(roundedNote / 12) - 1;
   
   return {
-    keyNum: keyNum,
+    keyNum,
     note: NOTE_NAMES[noteIndex] + octave,
-    pureTarget: pureTarget,
-    stretchedTarget: stretchedTarget,
-    cents: cents,
-    stretchCents: stretchCents
+    pureTarget,
+    stretchedTarget,
+    cents,
+    stretchCents
   };
 }
 
@@ -457,47 +476,39 @@ function drawStrobe(cents, idle = false) {
   if (idle) return;
 
   strobePhase += cents * 0.15;
-  
   sCtx.fillStyle = Math.abs(cents) < 1.5 ? '#00fabd' : '#d0bcff';
+  
   const barWidth = 12;
   const spacing = 30;
-  
   for (let x = (strobePhase % spacing) - spacing; x < strobeCanvas.width; x += spacing) {
     sCtx.fillRect(x, 0, barWidth, strobeCanvas.height);
   }
 }
 
+// Interpolations-Modell bleibt unangetastet (war super)
 function updateGlobalModel() {
   const points = [];
   pianoData.forEach((val, idx) => {
-    if (val !== null && val > 0) {
-      points.push({ key: idx + 1, b: val });
-    }
+    if (val !== null && val > 0) points.push({ key: idx + 1, b: val });
   });
 
   const validCount = points.length;
   progressText.innerText = `${validCount} / 88 Tasten eingemessen`;
 
-  // Fall A: Keine Messungen -> Nutze das physikalische J-Kurven-Standardmodell
   if (validCount === 0) {
     for (let i = 0; i < 88; i++) {
       let key = i + 1;
-      if (key < 40) {
-        smoothedB[i] = 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2);
-      } else {
-        smoothedB[i] = 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
-      }
+      smoothedB[i] = key < 40 
+        ? 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2)
+        : 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
     }
-  } 
-  // Fall B: Genau 1 Messpunkt -> Verschiebe das Standardmodell parallel zu deinem Messwert
-  else if (validCount === 1) {
+  } else if (validCount === 1) {
     const single = points[0];
     let defaultB = single.key < 40 
       ? 0.00015 + 0.0015 * Math.pow((40 - single.key) / 40, 2)
       : 0.00015 + 0.0035 * Math.pow((single.key - 40) / 48, 3);
     
     const ratio = single.b / defaultB;
-
     for (let i = 0; i < 88; i++) {
       let key = i + 1;
       let baseB = key < 40 
@@ -505,25 +516,19 @@ function updateGlobalModel() {
         : 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
       smoothedB[i] = baseB * ratio;
     }
-  } 
-  // Fall C: 2 oder mehr Messpunkte -> Log-lineare stückweise Interpolation & Extrapolation
-  else {
+  } else {
     points.sort((a, b) => a.key - b.key);
-
     for (let i = 0; i < 88; i++) {
       let key = i + 1;
-
       if (key <= points[0].key) {
         let p1 = points[0], p2 = points[1];
         let slope = (Math.log(p2.b) - Math.log(p1.b)) / (p2.key - p1.key);
         smoothedB[i] = Math.exp(Math.log(p1.b) + slope * (key - p1.key));
-      } 
-      else if (key >= points[points.length - 1].key) {
+      } else if (key >= points[points.length - 1].key) {
         let p1 = points[points.length - 2], p2 = points[points.length - 1];
         let slope = (Math.log(p2.b) - Math.log(p1.b)) / (p2.key - p1.key);
         smoothedB[i] = Math.exp(Math.log(p2.b) + slope * (key - p2.key));
-      } 
-      else {
+      } else {
         for (let j = 0; j < points.length - 1; j++) {
           if (key >= points[j].key && key <= points[j + 1].key) {
             let p1 = points[j], p2 = points[j + 1];
@@ -535,44 +540,29 @@ function updateGlobalModel() {
       }
     }
   }
-
   drawGraph(points);
 }
 
 function drawGraph(points) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#22222a'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, canvas.height / 2); ctx.lineTo(canvas.width, canvas.height / 2); ctx.stroke();
 
-  ctx.strokeStyle = '#22222a';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, canvas.height / 2);
-  ctx.lineTo(canvas.width, canvas.height / 2);
-  ctx.stroke();
-
-  ctx.strokeStyle = '#d0bcff';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
+  ctx.strokeStyle = '#d0bcff'; ctx.lineWidth = 2; ctx.beginPath();
   for (let i = 0; i < 88; i++) {
     const x = (i / 87) * (canvas.width - 20) + 10;
-    const logVal = Math.log10(smoothedB[i]);
-    // Anpassung der Darstellung an die typischen B-Werte
-    const y = canvas.height - ((logVal + 4.5) / 2.5) * canvas.height;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    const y = canvas.height - ((Math.log10(smoothedB[i]) + 4.5) / 2.5) * canvas.height;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.stroke();
 
   ctx.fillStyle = '#00fabd';
   points.forEach(p => {
     const x = ((p.key - 1) / 87) * (canvas.width - 20) + 10;
-    const logVal = Math.log10(p.b);
-    const y = canvas.height - ((logVal + 4.5) / 2.5) * canvas.height;
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
+    const y = canvas.height - ((Math.log10(p.b) + 4.5) / 2.5) * canvas.height;
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
   });
 }
 </script>
-
 </body>
 </html>
