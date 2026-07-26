@@ -218,7 +218,6 @@ startBtn.addEventListener('click', async () => {
   if (isListening) return;
 
   try {
-    // 1. Mikrofon-Stream ohne browserinterne Filterung & latencyHint anfragen
     const stream = await navigator.mediaDevices.getUserMedia({ 
       audio: {
         echoCancellation: false,
@@ -228,34 +227,27 @@ startBtn.addEventListener('click', async () => {
       video: false 
     });
     
-    // 2. AudioContext explizit mit latencyHint für interaktive Nutzung erstellen
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     
-    // 3. Wenn der Context durch das Berechtigungs-Popup pausiert wurde, aufwecken
     if (audioCtx.state === 'suspended') {
       await audioCtx.resume();
     }
     
-        analyser = audioCtx.createAnalyser();
+    analyser = audioCtx.createAnalyser();
     
-    // --- MAX-QUALITY FFT LOOP ---
-    // Startet extrem hoch (über aktuellem Standard), um zukunftssicher zu sein.
-    // Halbiert den Wert schrittweise, bis der Browser ihn akzeptiert.
     let maxFftSize = 262144; 
     while (maxFftSize >= 32) {
       try {
         analyser.fftSize = maxFftSize;
         console.log("Maximale FFT-Auflösung aktiviert:", analyser.fftSize);
-        break; // Erfolgreich gesetzt -> Schleife abbrechen
+        break; 
       } catch (e) {
-        maxFftSize /= 2; // FFT muss zwingend eine Zweierpotenz sein
+        maxFftSize /= 2; 
       }
     }
-    // ----------------------------
     
     analyser.smoothingTimeConstant = 0.05; 
 
-    
     microphone = audioCtx.createMediaStreamSource(stream);
     microphone.connect(analyser);
 
@@ -318,13 +310,11 @@ function processAudio() {
       }
     }
 
-    // Verbesserter Schwellenwert: -75 dB (erkennt Töne verlässlicher als -50 dB)
     if (maxVolume > -75 && bestBin !== -1) {
       const exactPeakBin = getInterpolatedPeakBin(dataArray, bestBin);
       const fundFreq = exactPeakBin * (nyquist / bufferLength);
       const a4Freq = parseFloat(a4Input.value) || 440;
       
-      // MULTI-PARTIAL ANALYSE: Suche bis zu 5 Teiltöne für High-End B-Berechnung
       let partials = [{n: 1, freq: fundFreq}];
       for (let n = 2; n <= 5; n++) {
         let expected = fundFreq * n;
@@ -332,7 +322,6 @@ function processAudio() {
         if (found > 0) partials.push({n: n, freq: found});
       }
 
-      // Lineare Regression zur Bestimmung von B über mehrere Teiltöne
       currentB = 0;
       if (partials.length >= 2) {
         let sumNum = 0, sumDen = 0;
@@ -361,7 +350,7 @@ function processAudio() {
       stretchedTargetEl.innerText = noteInfo.stretchedTarget.toFixed(2) + " Hz";
       
       centsEl.innerText = (noteInfo.cents >= 0 ? "+" : "") + noteInfo.cents.toFixed(1) + " Cts";
-      stretchCentsEl.innerText = "+" + noteInfo.stretchCents.toFixed(1) + " Cts";
+      stretchCentsEl.innerText = (noteInfo.stretchCents >= 0 ? "+" : "") + noteInfo.stretchCents.toFixed(1) + " Cts";
       
       if (Math.abs(noteInfo.cents) <= 1.5) {
         centsContainer.className = "cents-display cents-perfect";
@@ -374,7 +363,7 @@ function processAudio() {
 
       drawStrobe(noteInfo.cents);
     } else {
-      drawStrobe(0, true); // Stillstand im Stroboskop bei Stille
+      drawStrobe(0, true); 
     }
 
     requestAnimationFrame(analyze);
@@ -398,7 +387,6 @@ function findPartialPeak(dataArray, targetFreq, nyquist, bufferLength) {
     }
   }
   
-  // Verbesserter Schwellenwert für Obertöne (-85 dB statt -65 dB)
   if (peakBin !== -1 && maxVol > -85) {
     return getInterpolatedPeakBin(dataArray, peakBin) * (nyquist / bufferLength);
   }
@@ -416,9 +404,16 @@ function calculateTuning(freq, a4Freq) {
     globalB = smoothedB[keyNum - 1] || 0.0004;
   }
 
-  // Korrekte physikalische Oktavspreizung basierend auf B
+  // Korrekte physikalische Oktavspreizung mit Pivot bei A4
+  const pivotKey = 49;
   const stretchFactor = Math.sqrt(1 + globalB * 4);
-  const stretchedTarget = pureTarget * stretchFactor;
+  let stretchedTarget;
+  
+  if (keyNum >= pivotKey) {
+    stretchedTarget = pureTarget * stretchFactor; // Diskant: Nach oben spreizen
+  } else {
+    stretchedTarget = pureTarget / stretchFactor; // Bass: Nach unten spreizen
+  }
   
   const cents = 1200 * (Math.log(freq / stretchedTarget) / Math.log(2));
   const stretchCents = 1200 * (Math.log(stretchedTarget / pureTarget) / Math.log(2));
@@ -436,14 +431,13 @@ function calculateTuning(freq, a4Freq) {
   };
 }
 
-// Stroboskop-Animation rendering
 function drawStrobe(cents, idle = false) {
   sCtx.fillStyle = '#0a0a0c';
   sCtx.fillRect(0, 0, strobeCanvas.width, strobeCanvas.height);
 
   if (idle) return;
 
-  strobePhase += cents * 0.15; // Geschwindigkeit und Richtung der Muster-Bewegung
+  strobePhase += cents * 0.15;
   
   sCtx.fillStyle = Math.abs(cents) < 1.5 ? '#00fabd' : '#d0bcff';
   const barWidth = 12;
@@ -454,7 +448,6 @@ function drawStrobe(cents, idle = false) {
   }
 }
 
-// Robuste globale Interpolation über Polynom-Glättung
 function updateGlobalModel() {
   const points = [];
   pianoData.forEach((val, idx) => {
@@ -481,10 +474,14 @@ function updateGlobalModel() {
       smoothedB[i] = Math.exp(intercept + slope * (i + 1));
     }
   } else {
-    // Akustisch fundiertes Standard-Modell für ein Standard-Klavier
+    // Akustisch fundiertes Standard-Modell (J-Kurve) für ein Standard-Klavier
     for (let i = 0; i < 88; i++) {
       let key = i + 1;
-      smoothedB[i] = 0.0002 * Math.pow(1.025, 88 - key) + 0.00005;
+      if (key < 40) {
+        smoothedB[i] = 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2);
+      } else {
+        smoothedB[i] = 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
+      }
     }
   }
 
@@ -501,7 +498,6 @@ function drawGraph(points) {
   ctx.lineTo(canvas.width, canvas.height / 2);
   ctx.stroke();
 
-  // Zeichne geglättete Kurve
   ctx.strokeStyle = '#d0bcff';
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -514,7 +510,6 @@ function drawGraph(points) {
   }
   ctx.stroke();
 
-  // Zeichne echte Messpunkte
   ctx.fillStyle = '#00fabd';
   pianoData.forEach((val, idx) => {
     if (val !== null && val > 0) {
