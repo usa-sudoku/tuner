@@ -404,7 +404,7 @@ function calculateTuning(freq, a4Freq) {
     globalB = smoothedB[keyNum - 1] || 0.0004;
   }
 
-  // Korrekte physikalische Oktavspreizung mit Pivot bei A4
+  // Korrekte physikalische Oktavspreizung mit Pivot bei A4 (Taste 49)
   const pivotKey = 49;
   const stretchFactor = Math.sqrt(1 + globalB * 4);
   let stretchedTarget;
@@ -452,35 +452,67 @@ function updateGlobalModel() {
   const points = [];
   pianoData.forEach((val, idx) => {
     if (val !== null && val > 0) {
-      points.push({ x: idx + 1, y: Math.log(val) });
+      points.push({ key: idx + 1, b: val });
     }
   });
 
   const validCount = points.length;
   progressText.innerText = `${validCount} / 88 Tasten eingemessen`;
 
-  if (validCount >= 2) {
-    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    points.forEach(p => {
-      sumX += p.x;
-      sumY += p.y;
-      sumXY += p.x * p.y;
-      sumXX += p.x * p.x;
-    });
-    const slope = (validCount * sumXY - sumX * sumY) / (validCount * sumXX - sumX * sumX);
-    const intercept = (sumY - slope * sumX) / validCount;
-
-    for (let i = 0; i < 88; i++) {
-      smoothedB[i] = Math.exp(intercept + slope * (i + 1));
-    }
-  } else {
-    // Akustisch fundiertes Standard-Modell (J-Kurve) für ein Standard-Klavier
+  // Fall A: Keine Messungen -> Nutze das physikalische J-Kurven-Standardmodell
+  if (validCount === 0) {
     for (let i = 0; i < 88; i++) {
       let key = i + 1;
       if (key < 40) {
         smoothedB[i] = 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2);
       } else {
         smoothedB[i] = 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
+      }
+    }
+  } 
+  // Fall B: Genau 1 Messpunkt -> Verschiebe das Standardmodell parallel zu deinem Messwert
+  else if (validCount === 1) {
+    const single = points[0];
+    let defaultB = single.key < 40 
+      ? 0.00015 + 0.0015 * Math.pow((40 - single.key) / 40, 2)
+      : 0.00015 + 0.0035 * Math.pow((single.key - 40) / 48, 3);
+    
+    const ratio = single.b / defaultB;
+
+    for (let i = 0; i < 88; i++) {
+      let key = i + 1;
+      let baseB = key < 40 
+        ? 0.00015 + 0.0015 * Math.pow((40 - key) / 40, 2)
+        : 0.00015 + 0.0035 * Math.pow((key - 40) / 48, 3);
+      smoothedB[i] = baseB * ratio;
+    }
+  } 
+  // Fall C: 2 oder mehr Messpunkte -> Log-lineare stückweise Interpolation & Extrapolation
+  else {
+    points.sort((a, b) => a.key - b.key);
+
+    for (let i = 0; i < 88; i++) {
+      let key = i + 1;
+
+      if (key <= points[0].key) {
+        let p1 = points[0], p2 = points[1];
+        let slope = (Math.log(p2.b) - Math.log(p1.b)) / (p2.key - p1.key);
+        smoothedB[i] = Math.exp(Math.log(p1.b) + slope * (key - p1.key));
+      } 
+      else if (key >= points[points.length - 1].key) {
+        let p1 = points[points.length - 2], p2 = points[points.length - 1];
+        let slope = (Math.log(p2.b) - Math.log(p1.b)) / (p2.key - p1.key);
+        smoothedB[i] = Math.exp(Math.log(p2.b) + slope * (key - p2.key));
+      } 
+      else {
+        for (let j = 0; j < points.length - 1; j++) {
+          if (key >= points[j].key && key <= points[j + 1].key) {
+            let p1 = points[j], p2 = points[j + 1];
+            let t = (key - p1.key) / (p2.key - p1.key);
+            smoothedB[i] = Math.exp(Math.log(p1.b) * (1 - t) + Math.log(p2.b) * t);
+            break;
+          }
+        }
       }
     }
   }
@@ -504,6 +536,7 @@ function drawGraph(points) {
   for (let i = 0; i < 88; i++) {
     const x = (i / 87) * (canvas.width - 20) + 10;
     const logVal = Math.log10(smoothedB[i]);
+    // Anpassung der Darstellung an die typischen B-Werte
     const y = canvas.height - ((logVal + 4.5) / 2.5) * canvas.height;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
@@ -511,15 +544,13 @@ function drawGraph(points) {
   ctx.stroke();
 
   ctx.fillStyle = '#00fabd';
-  pianoData.forEach((val, idx) => {
-    if (val !== null && val > 0) {
-      const x = (idx / 87) * (canvas.width - 20) + 10;
-      const logVal = Math.log10(val);
-      const y = canvas.height - ((logVal + 4.5) / 2.5) * canvas.height;
-      ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  points.forEach(p => {
+    const x = ((p.key - 1) / 87) * (canvas.width - 20) + 10;
+    const logVal = Math.log10(p.b);
+    const y = canvas.height - ((logVal + 4.5) / 2.5) * canvas.height;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
   });
 }
 </script>
