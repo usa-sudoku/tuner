@@ -658,8 +658,10 @@ function updateGlobalModel() {
   for (let i = 0; i < 88; i++) {
     let key = i + 1;
     let baseB = 0.00015;
-    if (key < 40) baseB += 0.002 * Math.pow((40 - key) / 40, 2.5);
-    if (key > 40) baseB += 0.004 * Math.pow((key - 40) / 48, 3);
+    
+    // ANGEPASST: Moderaterer Anstieg für ein Standard Upright-Klavier
+    if (key < 40) baseB += 0.0011 * Math.pow((40 - key) / 40, 2.5);
+    if (key > 40) baseB += 0.0023 * Math.pow((key - 40) / 48, 3);
 
     if (validCount === 0) {
       smoothedBModel[i] = baseB;
@@ -669,9 +671,11 @@ function updateGlobalModel() {
       points.forEach(p => {
         let dist = key - p.key;
         let weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+        
         let pBaseB = 0.00015;
-        if (p.key < 40) pBaseB += 0.002 * Math.pow((40 - p.key) / 40, 2.5);
-        if (p.key > 40) pBaseB += 0.004 * Math.pow((p.key - 40) / 48, 3);
+        // ANGEPASST: Hier muss dieselbe moderatere Formel stehen!
+        if (p.key < 40) pBaseB += 0.0011 * Math.pow((40 - p.key) / 40, 2.5);
+        if (p.key > 40) pBaseB += 0.0023 * Math.pow((p.key - 40) / 48, 3);
         
         let measuredRatio = p.b / pBaseB;
         numerator += weight * measuredRatio;
