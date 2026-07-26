@@ -188,6 +188,11 @@ let currentB = 0;
 let bHistory = [];
 let strobePhase = 0;
 
+// Hysterese-Variablen gegen das Ausblenden im Ausklingen
+let signalHoldCounter = 0;
+const SIGNAL_HOLD_FRAMES = 45; // Hält das Stroboskop & die Werte ca. 0.75 Sekunden lang stabil
+let lastCents = 0;
+
 let pianoData = JSON.parse(localStorage.getItem('piano_pro_raw')) || new Array(88).fill(null);
 let smoothedB = new Array(88).fill(0);
 
@@ -240,7 +245,7 @@ startBtn.addEventListener('click', async () => {
 
     // Analysator 2: Zeit-Domäne (Schnelle Puffer für Autokorrelation/YIN im Bass)
     analyserTime = audioCtx.createAnalyser();
-    analyserTime.fftSize = 16384; // Genug für Frequenzen ab ~15 Hz
+    analyserTime.fftSize = 16384; 
     analyserTime.smoothingTimeConstant = 0;
 
     microphone = audioCtx.createMediaStreamSource(stream);
@@ -289,7 +294,7 @@ function getMedian(arr) {
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-// YIN Pitch Detection (Autokorrelation) - Beseitigt den Oktavfehler im Bass
+// YIN Pitch Detection
 function getPitchYIN(buffer, sampleRate) {
   const minFreq = 25; 
   const maxFreq = 4500; 
@@ -299,7 +304,6 @@ function getPitchYIN(buffer, sampleRate) {
   
   let yinBuffer = new Float32Array(maxTau + 1);
   
-  // Step 1: Difference function
   for (let t = 1; t <= maxTau; t++) {
     let sum = 0;
     for (let i = 0; i < W; i++) {
@@ -309,17 +313,15 @@ function getPitchYIN(buffer, sampleRate) {
     yinBuffer[t] = sum;
   }
   
-  // Step 2: Cumulative mean normalized difference
   yinBuffer[0] = 1;
   let runningSum = 0;
   let tauEstimate = -1;
-  const threshold = 0.15;
+  const threshold = 0.20; // Etwas vergrößerter Toleranzbereich
   
   for (let t = 1; t <= maxTau; t++) {
     runningSum += yinBuffer[t];
     yinBuffer[t] = yinBuffer[t] * t / runningSum;
     
-    // Step 3: Absolute threshold
     if (t >= minTau) {
       if (yinBuffer[t] < threshold) {
         while (t + 1 <= maxTau && yinBuffer[t + 1] < yinBuffer[t]) {
@@ -331,7 +333,6 @@ function getPitchYIN(buffer, sampleRate) {
     }
   }
   
-  // Fallback to global minimum
   if (tauEstimate === -1) {
     let minVal = Infinity;
     for (let t = minTau; t <= maxTau; t++) {
@@ -342,7 +343,6 @@ function getPitchYIN(buffer, sampleRate) {
     }
   }
   
-  // Step 4: Parabolic interpolation
   if (tauEstimate > 0 && tauEstimate < maxTau) {
     let s0 = yinBuffer[tauEstimate - 1];
     let s1 = yinBuffer[tauEstimate];
@@ -369,14 +369,14 @@ function processAudio() {
     
     analyserTime.getFloatTimeDomainData(dataArrayTime);
     
-    // Noise Gate Check
+    // Noise Gate Check (Empfindlichkeit deutlich erhöht, um leisere Signale zu erfassen)
     let rms = 0;
     for (let i = 0; i < bufferLengthTime; i++) {
       rms += dataArrayTime[i] * dataArrayTime[i];
     }
     rms = Math.sqrt(rms / bufferLengthTime);
 
-    if (rms > 0.005) {
+    if (rms > 0.0015) { // Schwelle abgesenkt von 0.005 auf 0.0015
       const sampleRate = audioCtx.sampleRate;
       const yinF0 = getPitchYIN(dataArrayTime, sampleRate);
       
@@ -385,12 +385,9 @@ function processAudio() {
         const nyquist = sampleRate / 2;
         const hzPerBin = nyquist / bufferLengthFreq;
         
-        // YIN gibt den exakten Grundton (eliminiert Oktavfehler). 
-        // Für absolute Cent-Präzision suchen wir den f0-Peak im High-Res FFT.
-        // Fehlt der Grundton im Bass physikalisch, fallback auf den YIN-Wert.
         let tuningFreq = yinF0;
         let partial1 = findPartialPeak(dataArrayFreq, yinF0 * 0.98, yinF0 * 1.02, hzPerBin);
-        if (partial1 && partial1.vol > -85) {
+        if (partial1 && partial1.vol > -95) { // Peak-Schwelle gesenkt
           tuningFreq = partial1.freq;
         }
 
@@ -398,7 +395,6 @@ function processAudio() {
         const noteInfo = calculateTuning(tuningFreq, a4Freq);
         currentKeyNum = noteInfo.keyNum;
 
-        // Clean Cut: Puffer bei Tonwechsel leeren
         if (lastKeyNum !== null && currentKeyNum !== lastKeyNum) {
           bHistory = [];
         }
@@ -407,7 +403,6 @@ function processAudio() {
         let partials = [];
         if (partial1) partials.push({n: 1, freq: tuningFreq, vol: partial1.vol});
         
-        // Empirische Suche der Obertöne auf Basis des erkannten f0
         for (let n = 2; n <= 8; n++) {
           let harmonicNominal = tuningFreq * n; 
           if (harmonicNominal > nyquist * 0.9) break; 
@@ -419,7 +414,6 @@ function processAudio() {
           if (found) partials.push({n: n, freq: found.freq, vol: found.vol});
         }
 
-        // B-Wert Berechnung über Least-Squares
         let calcB = 0;
         if (partials.length >= 3) {
           let N = partials.length;
@@ -454,6 +448,10 @@ function processAudio() {
         currentB = bHistory.length >= 5 ? getMedian(bHistory) : 0;
         saveBtn.disabled = (currentB === 0);
 
+        // Signaldaten für die Hold-Phase puffern
+        lastCents = noteInfo.cents;
+        signalHoldCounter = SIGNAL_HOLD_FRAMES; 
+
         noteEl.innerText = noteInfo.note;
         freqEl.innerText = tuningFreq.toFixed(2);
         pureTargetEl.innerText = noteInfo.pureTarget.toFixed(2) + " Hz";
@@ -469,18 +467,27 @@ function processAudio() {
 
         drawStrobe(noteInfo.cents);
       } else {
-        bHistory = [];
-        lastKeyNum = null;
-        drawStrobe(0, true);
+        handleSignalHold();
       }
+    } else {
+      handleSignalHold();
+    }
+
+    requestAnimationFrame(analyze);
+  }
+
+  function handleSignalHold() {
+    if (signalHoldCounter > 0) {
+      signalHoldCounter--;
+      // Stroboskop mit den letzten bekannten Cent-Werten weiterdrehen
+      drawStrobe(lastCents);
     } else {
       bHistory = [];
       lastKeyNum = null;
       drawStrobe(0, true); 
     }
-
-    requestAnimationFrame(analyze);
   }
+
   analyze();
 }
 
@@ -500,7 +507,7 @@ function findPartialPeak(dataArray, minHz, maxHz, hzPerBin) {
     }
   }
   
-  if (peakBin !== -1 && maxVol > -90) { 
+  if (peakBin !== -1 && maxVol > -98) { // Rauschgrenze abgesenkt von -90 auf -98
     const exactBin = getInterpolatedPeakBin(dataArray, peakBin);
     return { freq: exactBin * hzPerBin, vol: maxVol };
   }
