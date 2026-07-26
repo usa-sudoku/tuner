@@ -233,7 +233,7 @@ startBtn.addEventListener('click', async () => {
     });
     
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 65536; // Maximale FFT-Auflösung für tiefen Bass
+    analyser.fftSize = 32768; // Maximale FFT-Auflösung für tiefen Bass
     analyser.smoothingTimeConstant = 0.05; // Sofortige Erkennung ohne Verzögerung
     
     microphone = audioCtx.createMediaStreamSource(stream);
