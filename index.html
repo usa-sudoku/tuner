@@ -1,135 +1,148 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Piano Tuning Analyser - Master Pro Edition</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0a0a0c;
-      color: #e0e0e0;
-      margin: 0;
-      padding: 10px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    .card {
-      background: #16161a;
-      border: 1px solid #2a2a35;
-      border-radius: 16px;
-      padding: 18px;
-      width: 100%;
-      max-width: 480px;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.7);
-      box-sizing: border-box;
-      text-align: center;
-    }
-    h1 { font-size: 1.2rem; margin-top: 0; color: #d0bcff; letter-spacing: 0.5px; }
-    
-    .config-group {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: #1e1e24;
-      padding: 6px 12px;
-      border-radius: 8px;
-      margin-bottom: 10px;
-      border: 1px solid #2d2d38;
-    }
-    .config-group label { font-size: 0.8rem; color: #aaa; }
-    .config-group input {
-      width: 60px;
-      background: #111115;
-      border: 1px solid #d0bcff;
-      color: #fff;
-      padding: 4px;
-      border-radius: 4px;
-      text-align: center;
-      font-size: 0.9rem;
-      font-weight: bold;
-    }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Piano Tuning Analyser - Master Pro Edition</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0a0a0c;
+    color: #e0e0e0;
+    margin: 0;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .card {
+    background: #16161a;
+    border: 1px solid #2a2a35;
+    border-radius: 16px;
+    padding: 18px;
+    width: 100%;
+    max-width: 480px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.7);
+    box-sizing: border-box;
+    text-align: center;
+  }
+  h1 { font-size: 1.2rem; margin-top: 0; color: #d0bcff; letter-spacing: 0.5px; }
 
-    button {
-      background: #d0bcff;
-      color: #111;
-      border: none;
-      padding: 10px 16px;
-      font-size: 0.9rem;
-      font-weight: bold;
-      border-radius: 20px;
-      cursor: pointer;
-      margin-bottom: 8px;
-      width: 100%;
-      transition: all 0.2s;
-    }
-    button:hover { opacity: 0.9; transform: translateY(-1px); }
-    button:disabled { background: #333; color: #778; cursor: not-allowed; transform: none; }
-    button.btn-save { background: #00fabd; margin-top: 6px; }
-    button.btn-clear { background: #ffb4ab; color: #300; font-size: 0.75rem; padding: 5px 10px; margin-top: 8px; width: auto; }
+  .config-group {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #1e1e24;
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #2d2d38;
+  }
+  .config-group label { font-size: 0.8rem; color: #aaa; }
+  .config-group input {
+    width: 60px;
+    background: #111115;
+    border: 1px solid #d0bcff;
+    color: #fff;
+    padding: 4px;
+    border-radius: 4px;
+    text-align: center;
+    font-size: 0.9rem;
+    font-weight: bold;
+  }
 
-    .note-display { font-size: 2.8rem; font-weight: 800; color: #fff; margin: 0; line-height: 1; }
-    .freq-display { font-size: 1rem; color: #00fabd; margin-bottom: 4px; }
-    
-    .strobe-container {
-      margin: 8px 0;
-      background: #000;
-      border-radius: 6px;
-      border: 1px solid #333;
-      overflow: hidden;
-      height: 40px;
-    }
-    canvas#strobeCanvas {
-      width: 100%;
-      height: 40px;
-    }
+  button {
+    background: #d0bcff;
+    color: #111;
+    border: none;
+    padding: 10px 16px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    border-radius: 20px;
+    cursor: pointer;
+    margin-bottom: 8px;
+    width: 100%;
+    transition: all 0.2s;
+  }
+  button:hover { opacity: 0.9; transform: translateY(-1px); }
+  button:disabled { background: #333; color: #778; cursor: not-allowed; transform: none; }
+  button.btn-save { background: #00fabd; margin-top: 6px; }
+  button.btn-clear { background: #ffb4ab; color: #300; font-size: 0.75rem; padding: 5px 10px; margin-top: 8px; width: auto; }
 
-    .cents-display { font-size: 1.3rem; margin: 4px 0; font-weight: bold; }
-    .cents-perfect { color: #00fabd; }
-    .cents-off { color: #ffb4ab; }
-    
-    .metrics {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin-top: 8px;
-      background: #1e1e24;
-      padding: 8px;
-      border-radius: 8px;
-      text-align: left;
-      font-size: 0.75rem;
-      border: 1px solid #2d2d38;
-    }
-    .metrics div span { display: block; color: #8e8e99; }
-    .metrics div strong { font-size: 0.85rem; color: #fff; }
+  .note-display { font-size: 2.8rem; font-weight: 800; color: #fff; margin: 0; line-height: 1; }
+  .freq-display { font-size: 1rem; color: #00fabd; margin-bottom: 4px; }
+  
+  .mode-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: #333;
+    color: #aaa;
+    margin-bottom: 8px;
+    font-weight: bold;
+  }
+  .mode-fast { background: #443311; color: #ffb4ab; }
+  .mode-deep { background: #004433; color: #00fabd; }
 
-    .section-title { font-size: 0.85rem; color: #d0bcff; margin: 12px 0 4px 0; text-align: left; font-weight: bold; }
-    canvas#curveCanvas {
-      width: 100%;
-      height: 120px;
-      background: #111115;
-      border-radius: 6px;
-      border: 1px solid #2d2d38;
-    }
-    .progress-bar { font-size: 0.75rem; color: #8e8e99; margin-top: 3px; }
-    .legend {
-      display: flex;
-      justify-content: space-around;
-      font-size: 0.7rem;
-      margin-top: 4px;
-      color: #aaa;
-    }
-    .legend span::before { content: "■ "; }
-    .legend-dots::before { color: #00fabd; }
-    .legend-line::before { color: #d0bcff; }
-  </style>
+  .strobe-container {
+    margin: 8px 0;
+    background: #000;
+    border-radius: 6px;
+    border: 1px solid #333;
+    overflow: hidden;
+    height: 40px;
+  }
+  canvas#strobeCanvas {
+    width: 100%;
+    height: 40px;
+  }
+
+  .cents-display { font-size: 1.3rem; margin: 4px 0; font-weight: bold; }
+  .cents-perfect { color: #00fabd; }
+  .cents-off { color: #ffb4ab; }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 8px;
+    background: #1e1e24;
+    padding: 8px;
+    border-radius: 8px;
+    text-align: left;
+    font-size: 0.75rem;
+    border: 1px solid #2d2d38;
+  }
+  .metrics div span { display: block; color: #8e8e99; }
+  .metrics div strong { font-size: 0.85rem; color: #fff; }
+
+  .section-title { font-size: 0.85rem; color: #d0bcff; margin: 12px 0 4px 0; text-align: left; font-weight: bold; }
+  canvas#curveCanvas {
+    width: 100%;
+    height: 120px;
+    background: #111115;
+    border-radius: 6px;
+    border: 1px solid #2d2d38;
+  }
+  .progress-bar { font-size: 0.75rem; color: #8e8e99; margin-top: 3px; }
+  .legend {
+    display: flex;
+    justify-content: space-around;
+    font-size: 0.7rem;
+    margin-top: 4px;
+    color: #aaa;
+  }
+  .legend span::before { content: "■ "; }
+  .legend-dots::before { color: #00fabd; }
+  .legend-line::before { color: #d0bcff; }
+</style>
 </head>
 <body>
 
 <div class="card">
   <h1>Master Klavier-Stimmanalysator</h1>
-  
+
   <div class="config-group">
     <label for="a4Input">Referenz A4 (Hz):</label>
     <input type="number" id="a4Input" value="440" step="0.1" min="400" max="480">
@@ -137,13 +150,14 @@
 
   <button id="startBtn">1. Studio-Mikrofon starten</button>
 
+  <div class="mode-badge" id="modeBadge">Standby</div>
   <div class="note-display" id="note">--</div>
   <div class="freq-display"><span id="freq">0.00</span> Hz</div>
-  
+
   <div class="strobe-container">
     <canvas id="strobeCanvas" width="440" height="40"></canvas>
   </div>
-  
+
   <div class="cents-display" id="centsContainer"><span id="cents">0.0</span> Cents</div>
 
   <div class="metrics">
@@ -170,7 +184,7 @@
   <div class="section-title">Inharmonizitäts-Profil (Robust Fit)</div>
   <canvas id="curveCanvas" width="400" height="120"></canvas>
   <div class="progress-bar" id="progressText">0 / 88 Tasten eingemessen</div>
-  
+
   <div class="legend">
     <span class="legend-dots">Messpunkte</span>
     <span class="legend-line">Wannen-Modell (Adaptiv)</span>
@@ -180,27 +194,42 @@
 </div>
 
 <script>
-let audioCtx, analyserFreq, analyserTime, microphone;
+let audioCtx, analyserFast, analyserDeep, microphone;
 let isListening = false;
+
+// Kaskadierende Arrays vorkompiliert zur Leistungssteigerung (Vermeidung von GC-Spikes)
+const FAST_FFT_SIZE = 4096;
+let DEEP_FFT_SIZE = 32768; // Web Audio API Maximum für höchste Genauigkeit im Bass
+
+const dataTimeFast = new Float32Array(FAST_FFT_SIZE);
+let dataTimeDeep = new Float32Array(DEEP_FFT_SIZE);
+const dataFreqFast = new Float32Array(FAST_FFT_SIZE / 2);
+let dataFreqDeep = new Float32Array(DEEP_FFT_SIZE / 2);
+
+// Zustands- und Hysterese-Variablen
 let currentKeyNum = null;
 let lastKeyNum = null;
-let currentB = 0;
-let bHistory = [];
-let strobePhase = 0;
+let noteStartTimeMs = 0;
+let lastValidSignalMs = 0;
 
-// Hysterese-Variablen gegen das Ausblenden im Ausklingen
+let medianBHistory = [];
+let medianF0History = [];
+
+let currentB = 0;
+let smoothedF0 = 0;
+let strobePhase = 0;
 let signalHoldCounter = 0;
-const SIGNAL_HOLD_FRAMES = 45; // Hält das Stroboskop & die Werte ca. 0.75 Sekunden lang stabil
+const SIGNAL_HOLD_FRAMES = 45; // ~0.75 Sek. Hold
 let lastCents = 0;
 
 let pianoData = JSON.parse(localStorage.getItem('piano_pro_raw')) || new Array(88).fill(null);
-let smoothedB = new Array(88).fill(0);
+let smoothedBModel = new Array(88).fill(0);
 
+// UI Elemente
 const startBtn = document.getElementById('startBtn');
 const saveBtn = document.getElementById('saveBtn');
 const clearBtn = document.getElementById('clearBtn');
 const a4Input = document.getElementById('a4Input');
-
 const noteEl = document.getElementById('note');
 const freqEl = document.getElementById('freq');
 const centsEl = document.getElementById('cents');
@@ -210,6 +239,7 @@ const stretchedTargetEl = document.getElementById('stretchedTarget');
 const inharmonicityEl = document.getElementById('inharmonicity');
 const stretchCentsEl = document.getElementById('stretchCents');
 const progressText = document.getElementById('progressText');
+const modeBadge = document.getElementById('modeBadge');
 
 const canvas = document.getElementById('curveCanvas');
 const ctx = canvas.getContext('2d');
@@ -222,35 +252,34 @@ updateGlobalModel();
 
 startBtn.addEventListener('click', async () => {
   if (isListening) return;
-
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: false }, 
-      video: false 
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: false },
+      video: false
     });
-    
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     if (audioCtx.state === 'suspended') await audioCtx.resume();
-    
-    // Analysator 1: Frequenz-Domäne (Hohe Auflösung für Obertöne)
-    analyserFreq = audioCtx.createAnalyser();
-    let maxFftSize = 262144;
-    while (maxFftSize >= 32) {
-      try {
-        analyserFreq.fftSize = maxFftSize;
-        break; 
-      } catch (e) { maxFftSize /= 2; }
-    }
-    analyserFreq.smoothingTimeConstant = 0.2;
 
-    // Analysator 2: Zeit-Domäne (Schnelle Puffer für Autokorrelation/YIN im Bass)
-    analyserTime = audioCtx.createAnalyser();
-    analyserTime.fftSize = 16384; 
-    analyserTime.smoothingTimeConstant = 0;
+    // Analyser 1: Fast (Echtzeit-Feedback, ~85ms)
+    analyserFast = audioCtx.createAnalyser();
+    analyserFast.fftSize = FAST_FFT_SIZE;
+    analyserFast.smoothingTimeConstant = 0.0;
+
+    // Analyser 2: Deep (Labor-Präzision & Hohe Auflösung im Bass)
+    analyserDeep = audioCtx.createAnalyser();
+    try {
+      analyserDeep.fftSize = DEEP_FFT_SIZE;
+    } catch(e) {
+      DEEP_FFT_SIZE = 16384; // Fallback für ältere Browser
+      analyserDeep.fftSize = DEEP_FFT_SIZE;
+      dataTimeDeep = new Float32Array(DEEP_FFT_SIZE);
+      dataFreqDeep = new Float32Array(DEEP_FFT_SIZE / 2);
+    }
+    analyserDeep.smoothingTimeConstant = 0.0;
 
     microphone = audioCtx.createMediaStreamSource(stream);
-    microphone.connect(analyserFreq);
-    microphone.connect(analyserTime);
+    microphone.connect(analyserFast);
+    microphone.connect(analyserDeep);
 
     isListening = true;
     startBtn.innerText = "Pro-Analysator aktiv";
@@ -288,22 +317,22 @@ function getInterpolatedPeakBin(dataArray, bin) {
   return bin + p;
 }
 
+// Gewichteter Median: Sehr robust gegen Anschlags-Geräusche (Ausreißer)
 function getMedian(arr) {
+  if(arr.length === 0) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-// YIN Pitch Detection
+// YIN Pitch Detection (Arbeitet flexibel auf jedem Puffer - Fast oder Deep)
 function getPitchYIN(buffer, sampleRate) {
-  const minFreq = 25; 
-  const maxFreq = 4500; 
+  const minFreq = 25; const maxFreq = 4500;
   const W = Math.floor(buffer.length / 2);
   const minTau = Math.max(2, Math.floor(sampleRate / maxFreq));
   const maxTau = Math.min(W, Math.ceil(sampleRate / minFreq));
-  
+
   let yinBuffer = new Float32Array(maxTau + 1);
-  
   for (let t = 1; t <= maxTau; t++) {
     let sum = 0;
     for (let i = 0; i < W; i++) {
@@ -312,157 +341,170 @@ function getPitchYIN(buffer, sampleRate) {
     }
     yinBuffer[t] = sum;
   }
-  
   yinBuffer[0] = 1;
   let runningSum = 0;
   let tauEstimate = -1;
-  const threshold = 0.20; // Etwas vergrößerter Toleranzbereich
-  
+  const threshold = 0.20;
+
   for (let t = 1; t <= maxTau; t++) {
     runningSum += yinBuffer[t];
     yinBuffer[t] = yinBuffer[t] * t / runningSum;
-    
-    if (t >= minTau) {
-      if (yinBuffer[t] < threshold) {
-        while (t + 1 <= maxTau && yinBuffer[t + 1] < yinBuffer[t]) {
-          t++;
-        }
-        tauEstimate = t;
-        break;
-      }
+    if (t >= minTau && yinBuffer[t] < threshold) {
+      while (t + 1 <= maxTau && yinBuffer[t + 1] < yinBuffer[t]) t++;
+      tauEstimate = t; break;
     }
   }
-  
+
   if (tauEstimate === -1) {
     let minVal = Infinity;
     for (let t = minTau; t <= maxTau; t++) {
-      if (yinBuffer[t] < minVal) {
-        minVal = yinBuffer[t];
-        tauEstimate = t;
-      }
+      if (yinBuffer[t] < minVal) { minVal = yinBuffer[t]; tauEstimate = t; }
     }
   }
-  
+
   if (tauEstimate > 0 && tauEstimate < maxTau) {
     let s0 = yinBuffer[tauEstimate - 1];
     let s1 = yinBuffer[tauEstimate];
     let s2 = yinBuffer[tauEstimate + 1];
     let denominator = 2 * (s0 + s2 - 2 * s1);
+    if (denominator !== 0) tauEstimate += (s0 - s2) / denominator;
+  }
+  return tauEstimate > 0 ? sampleRate / tauEstimate : -1;
+}
+
+// Extrahiert Partiale und B-Wert aus einem beliebigen Frequenzspektrum (Fast oder Deep)
+function extractDataFromSpectrum(f0Guide, dataFreqArray, hzPerBin, nyquist) {
+  let exactF0 = f0Guide;
+  let partial1 = findPartialPeak(dataFreqArray, f0Guide * 0.96, f0Guide * 1.04, hzPerBin);
+  if (partial1 && partial1.vol > -95) {
+    exactF0 = partial1.freq;
+  }
+
+  let partials = [];
+  if (partial1) partials.push({n: 1, freq: exactF0, vol: partial1.vol});
+
+  for (let n = 2; n <= 8; n++) {
+    let harmonicNominal = exactF0 * n;
+    if (harmonicNominal > nyquist * 0.9) break;
+
+    let minHz = harmonicNominal * 0.96;
+    let maxHz = harmonicNominal * (1 + 0.0015 * n * n + 0.03);
+
+    let found = findPartialPeak(dataFreqArray, minHz, maxHz, hzPerBin);
+    if (found) partials.push({n: n, freq: found.freq, vol: found.vol});
+  }
+
+  let calcB = 0;
+  if (partials.length >= 3) {
+    let N = partials.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+    for (let p of partials) {
+      let x = p.n * p.n;
+      let y = (p.freq * p.freq) / (p.n * p.n);
+      sumX += x; sumY += y; sumXY += x * y; sumX2 += x * x;
+    }
+    let denominator = (N * sumX2) - (sumX * sumX);
     if (denominator !== 0) {
-      tauEstimate += (s0 - s2) / denominator;
+      let m = ((N * sumXY) - (sumX * sumY)) / denominator;
+      let c = (sumY - (m * sumX)) / N;
+      if (c > 0 && m > 0) calcB = m / c;
     }
   }
-  
-  if (tauEstimate > 0) return sampleRate / tauEstimate;
-  return -1;
+  return { exactF0, calcB };
 }
 
 function processAudio() {
-  const bufferLengthFreq = analyserFreq.frequencyBinCount;
-  const dataArrayFreq = new Float32Array(bufferLengthFreq);
-  
-  const bufferLengthTime = analyserTime.fftSize;
-  const dataArrayTime = new Float32Array(bufferLengthTime);
-  
   function analyze() {
     if (!isListening) return;
-    
-    analyserTime.getFloatTimeDomainData(dataArrayTime);
-    
-    // Noise Gate Check (Empfindlichkeit deutlich erhöht, um leisere Signale zu erfassen)
+
+    analyserFast.getFloatTimeDomainData(dataTimeFast);
     let rms = 0;
-    for (let i = 0; i < bufferLengthTime; i++) {
-      rms += dataArrayTime[i] * dataArrayTime[i];
-    }
-    rms = Math.sqrt(rms / bufferLengthTime);
+    for (let i = 0; i < FAST_FFT_SIZE; i++) rms += dataTimeFast[i] * dataTimeFast[i];
+    rms = Math.sqrt(rms / FAST_FFT_SIZE);
 
-    if (rms > 0.0015) { // Schwelle abgesenkt von 0.005 auf 0.0015
+    const now = Date.now();
+
+    if (rms > 0.0015) {
       const sampleRate = audioCtx.sampleRate;
-      const yinF0 = getPitchYIN(dataArrayTime, sampleRate);
+      const nyquist = sampleRate / 2;
       
+      const isDeepReady = (now - noteStartTimeMs) > 600;
+      let yinF0 = -1;
+
+      // YIN nutzt im Deep-Modus den großen Zeitpuffer für maximale Auflösung im Bass
+      if (!isDeepReady) {
+        yinF0 = getPitchYIN(dataTimeFast, sampleRate);
+      } else {
+        analyserDeep.getFloatTimeDomainData(dataTimeDeep);
+        yinF0 = getPitchYIN(dataTimeDeep, sampleRate);
+      }
+
       if (yinF0 !== -1 && yinF0 > 25 && yinF0 < 4500) {
-        analyserFreq.getFloatFrequencyData(dataArrayFreq);
-        const nyquist = sampleRate / 2;
-        const hzPerBin = nyquist / bufferLengthFreq;
-        
-        let tuningFreq = yinF0;
-        let partial1 = findPartialPeak(dataArrayFreq, yinF0 * 0.98, yinF0 * 1.02, hzPerBin);
-        if (partial1 && partial1.vol > -95) { // Peak-Schwelle gesenkt
-          tuningFreq = partial1.freq;
-        }
-
+        // Welcher Ton ist das? (für Note-Change-Erkennung)
         const a4Freq = parseFloat(a4Input.value) || 440;
-        const noteInfo = calculateTuning(tuningFreq, a4Freq);
-        currentKeyNum = noteInfo.keyNum;
-
-        if (lastKeyNum !== null && currentKeyNum !== lastKeyNum) {
-          bHistory = [];
-        }
-        lastKeyNum = currentKeyNum;
-
-        let partials = [];
-        if (partial1) partials.push({n: 1, freq: tuningFreq, vol: partial1.vol});
+        const roughNoteInfo = calculateTuning(yinF0, a4Freq);
         
-        for (let n = 2; n <= 8; n++) {
-          let harmonicNominal = tuningFreq * n; 
-          if (harmonicNominal > nyquist * 0.9) break; 
+        // Ton-Wechsel erkannt -> Historie flushen (Neustart)
+        if (roughNoteInfo.keyNum !== currentKeyNum || (now - lastValidSignalMs > 400)) {
+          currentKeyNum = roughNoteInfo.keyNum;
+          noteStartTimeMs = now;
+          medianBHistory = [];
+          medianF0History = [];
+        }
+        lastValidSignalMs = now;
+
+        let extraction;
+
+        if (!isDeepReady) {
+          // Phase 1: Schnelle Reaktion (Fast FFT)
+          analyserFast.getFloatFrequencyData(dataFreqFast);
+          const hzPerBinFast = nyquist / (FAST_FFT_SIZE / 2);
+          extraction = extractDataFromSpectrum(yinF0, dataFreqFast, hzPerBinFast, nyquist);
           
-          let minHz = harmonicNominal * 0.98;
-          let maxHz = harmonicNominal * (1 + 0.0015 * n * n + 0.02);
+          modeBadge.innerText = "Echtzeit (Fast)";
+          modeBadge.className = "mode-badge mode-fast";
+        } else {
+          // Phase 2: Labor-Präzision übernimmt nahtlos (Deep FFT + Deep YIN)
+          analyserDeep.getFloatFrequencyData(dataFreqDeep);
+          const hzPerBinDeep = nyquist / (analyserDeep.fftSize / 2);
+          extraction = extractDataFromSpectrum(yinF0, dataFreqDeep, hzPerBinDeep, nyquist);
           
-          let found = findPartialPeak(dataArrayFreq, minHz, maxHz, hzPerBin);
-          if (found) partials.push({n: n, freq: found.freq, vol: found.vol});
+          modeBadge.innerText = "Präzision (Deep)";
+          modeBadge.className = "mode-badge mode-deep";
         }
 
-        let calcB = 0;
-        if (partials.length >= 3) {
-          let N = partials.length;
-          let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-
-          for (let p of partials) {
-            let x = p.n * p.n;
-            let y = (p.freq * p.freq) / (p.n * p.n);
-
-            sumX += x;
-            sumY += y;
-            sumXY += x * y;
-            sumX2 += x * x;
-          }
-
-          let denominator = (N * sumX2) - (sumX * sumX);
-          if (denominator !== 0) {
-            let m = ((N * sumXY) - (sumX * sumY)) / denominator;
-            let c = (sumY - (m * sumX)) / N;
-
-            if (c > 0 && m > 0) {
-              calcB = m / c;
-            }
-          }
+        // Werte der aktuellen Messung in den gleitenden Median werfen
+        if (extraction.calcB >= 0.000005 && extraction.calcB <= 0.08) {
+          medianBHistory.push(extraction.calcB);
+          // Halte die letzten 20 Messungen im Pool
+          if (medianBHistory.length > 20) medianBHistory.shift(); 
         }
 
-        if (calcB >= 0.000005 && calcB <= 0.08) {
-          bHistory.push(calcB);
-          if (bHistory.length > 60) bHistory.shift(); 
-        }
+        medianF0History.push(extraction.exactF0);
+        if (medianF0History.length > 15) medianF0History.shift();
 
-        currentB = bHistory.length >= 5 ? getMedian(bHistory) : 0;
+        // 3. Werte Auslesen & Berechnen
+        currentB = getMedian(medianBHistory);
+        smoothedF0 = getMedian(medianF0History);
+        
+        // Cents & Anzeige berechnen
+        const noteInfo = calculateTuning(smoothedF0, a4Freq);
+        
         saveBtn.disabled = (currentB === 0);
-
-        // Signaldaten für die Hold-Phase puffern
         lastCents = noteInfo.cents;
-        signalHoldCounter = SIGNAL_HOLD_FRAMES; 
+        signalHoldCounter = SIGNAL_HOLD_FRAMES;
 
+        // UI Update
         noteEl.innerText = noteInfo.note;
-        freqEl.innerText = tuningFreq.toFixed(2);
+        freqEl.innerText = smoothedF0.toFixed(2);
         pureTargetEl.innerText = noteInfo.pureTarget.toFixed(2) + " Hz";
         stretchedTargetEl.innerText = noteInfo.stretchedTarget.toFixed(2) + " Hz";
-        
+
         centsEl.innerText = (noteInfo.cents >= 0 ? "+" : "") + noteInfo.cents.toFixed(1) + " Cts";
         stretchCentsEl.innerText = (noteInfo.stretchCents >= 0 ? "+" : "") + noteInfo.stretchCents.toFixed(1) + " Cts";
-        
         centsContainer.className = Math.abs(noteInfo.cents) <= 1.5 ? "cents-display cents-perfect" : "cents-display cents-off";
 
-        inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Liest Partials...";
+        inharmonicityEl.innerText = currentB > 0 ? currentB.toExponential(2) : "Warte auf Partiale...";
         inharmonicityEl.style.color = currentB > 0 ? "#00fabd" : "#ffb4ab";
 
         drawStrobe(noteInfo.cents);
@@ -472,42 +514,40 @@ function processAudio() {
     } else {
       handleSignalHold();
     }
-
     requestAnimationFrame(analyze);
   }
 
   function handleSignalHold() {
     if (signalHoldCounter > 0) {
       signalHoldCounter--;
-      // Stroboskop mit den letzten bekannten Cent-Werten weiterdrehen
-      drawStrobe(lastCents);
+      drawStrobe(lastCents); // Strobe dreht sanft aus
     } else {
-      bHistory = [];
-      lastKeyNum = null;
-      drawStrobe(0, true); 
+      currentKeyNum = null;
+      modeBadge.innerText = "Standby";
+      modeBadge.className = "mode-badge";
+      drawStrobe(0, true);
     }
   }
-
+  
   analyze();
 }
 
 function findPartialPeak(dataArray, minHz, maxHz, hzPerBin) {
   const minBin = Math.max(1, Math.floor(minHz / hzPerBin));
   const maxBin = Math.min(dataArray.length - 2, Math.ceil(maxHz / hzPerBin));
-  
+
   let maxVol = -Infinity;
   let peakBin = -1;
-  
+
   for (let i = minBin; i <= maxBin; i++) {
     if (dataArray[i] > dataArray[i-1] && dataArray[i] > dataArray[i+1]) {
-        if (dataArray[i] > maxVol) {
-          maxVol = dataArray[i];
-          peakBin = i;
-        }
+      if (dataArray[i] > maxVol) {
+        maxVol = dataArray[i];
+        peakBin = i;
+      }
     }
   }
-  
-  if (peakBin !== -1 && maxVol > -98) { // Rauschgrenze abgesenkt von -90 auf -98
+  if (peakBin !== -1 && maxVol > -98) {
     const exactBin = getInterpolatedPeakBin(dataArray, peakBin);
     return { freq: exactBin * hzPerBin, vol: maxVol };
   }
@@ -521,37 +561,32 @@ function calculateTuning(freq, a4Freq) {
   const keyNum = roundedNote - 20;
 
   let globalB = 0.0004;
-  if (keyNum >= 1 && keyNum <= 88) {
-    globalB = smoothedB[keyNum - 1] || 0.0004;
-  }
+  if (keyNum >= 1 && keyNum <= 88) globalB = smoothedBModel[keyNum - 1] || 0.0004;
 
-  const pivotKey = 49; 
-  const stretchFactorPerOctave = Math.sqrt(1 + globalB * 4); 
+  const pivotKey = 49;
+  const stretchFactorPerOctave = Math.sqrt(1 + globalB * 4);
   const distanceInOctaves = (keyNum - pivotKey) / 12;
   const cumulativeStretch = Math.pow(stretchFactorPerOctave, distanceInOctaves);
-  
+
   const stretchedTarget = pureTarget * cumulativeStretch;
-  
   const cents = 1200 * (Math.log(freq / stretchedTarget) / Math.log(2));
   const stretchCents = 1200 * (Math.log(stretchedTarget / pureTarget) / Math.log(2));
-  
+
   const noteIndex = (roundedNote % 12 + 12) % 12;
   const octave = Math.floor(roundedNote / 12) - 1;
-  
+
   return { keyNum, note: NOTE_NAMES[noteIndex] + octave, pureTarget, stretchedTarget, cents, stretchCents };
 }
 
 function drawStrobe(cents, idle = false) {
   sCtx.fillStyle = '#0a0a0c';
   sCtx.fillRect(0, 0, strobeCanvas.width, strobeCanvas.height);
-
   if (idle) return;
 
   strobePhase += cents * 0.15;
   sCtx.fillStyle = Math.abs(cents) < 1.5 ? '#00fabd' : '#d0bcff';
-  
-  const barWidth = 12;
-  const spacing = 30;
+
+  const barWidth = 12; const spacing = 30;
   for (let x = (strobePhase % spacing) - spacing; x < strobeCanvas.width; x += spacing) {
     sCtx.fillRect(x, 0, barWidth, strobeCanvas.height);
   }
@@ -568,22 +603,18 @@ function updateGlobalModel() {
 
   for (let i = 0; i < 88; i++) {
     let key = i + 1;
-    
     let baseB = 0.00015;
     if (key < 40) baseB += 0.002 * Math.pow((40 - key) / 40, 2.5);
     if (key > 40) baseB += 0.004 * Math.pow((key - 40) / 48, 3);
 
     if (validCount === 0) {
-      smoothedB[i] = baseB;
+      smoothedBModel[i] = baseB;
     } else {
-      let numerator = 0;
-      let denominator = 0.0001; 
+      let numerator = 0; let denominator = 0.0001;
       const sigma = 8.0;
-
       points.forEach(p => {
         let dist = key - p.key;
         let weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
-        
         let pBaseB = 0.00015;
         if (p.key < 40) pBaseB += 0.002 * Math.pow((40 - p.key) / 40, 2.5);
         if (p.key > 40) pBaseB += 0.004 * Math.pow((p.key - 40) / 48, 3);
@@ -592,12 +623,9 @@ function updateGlobalModel() {
         numerator += weight * measuredRatio;
         denominator += weight;
       });
-
       let ratio = numerator / denominator;
-      let confidence = Math.min(1.0, denominator / 1.5); 
-      let finalRatio = confidence * ratio + (1 - confidence) * 1.0;
-
-      smoothedB[i] = baseB * finalRatio;
+      let confidence = Math.min(1.0, denominator / 1.5);
+      smoothedBModel[i] = baseB * (confidence * ratio + (1 - confidence) * 1.0);
     }
   }
   drawGraph(points);
@@ -611,7 +639,7 @@ function drawGraph(points) {
   ctx.strokeStyle = '#d0bcff'; ctx.lineWidth = 2; ctx.beginPath();
   for (let i = 0; i < 88; i++) {
     const x = (i / 87) * (canvas.width - 20) + 10;
-    const y = canvas.height - ((Math.log10(smoothedB[i]) + 4.5) / 2.5) * canvas.height;
+    const y = canvas.height - ((Math.log10(smoothedBModel[i]) + 4.5) / 2.5) * canvas.height;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.stroke();
