@@ -67,7 +67,31 @@
   button:hover { opacity: 0.9; transform: translateY(-1px); }
   button:disabled { background: #333; color: #778; cursor: not-allowed; transform: none; }
   button.btn-save { background: #00fabd; margin-top: 6px; }
-  button.btn-clear { background: #ffb4ab; color: #300; font-size: 0.75rem; padding: 5px 10px; margin-top: 8px; width: auto; }
+  
+  .action-buttons-row {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 8px;
+  }
+
+  button.btn-undo { 
+    background: #ffdcc8; 
+    color: #351000; 
+    font-size: 0.75rem; 
+    padding: 6px 12px; 
+    width: auto; 
+    margin-bottom: 0;
+  }
+
+  button.btn-clear { 
+    background: #ffb4ab; 
+    color: #300; 
+    font-size: 0.75rem; 
+    padding: 6px 12px; 
+    width: auto; 
+    margin-bottom: 0;
+  }
 
   .note-display { font-size: 2.8rem; font-weight: 800; color: #fff; margin: 0; line-height: 1; }
   .freq-display { font-size: 1rem; color: #00fabd; margin-bottom: 4px; }
@@ -84,6 +108,7 @@
   }
   .mode-fast { background: #443311; color: #ffb4ab; }
   .mode-deep { background: #004433; color: #00fabd; }
+  .mode-hold { background: #002244; color: #80c3ff; }
 
   .strobe-container {
     margin: 8px 0;
@@ -190,16 +215,18 @@
     <span class="legend-line">Wannen-Modell (Adaptiv)</span>
   </div>
 
-  <button id="clearBtn" class="btn-clear">Werksspeicher löschen</button>
+  <div class="action-buttons-row">
+    <button id="undoBtn" class="btn-undo">Letzten Wert löschen</button>
+    <button id="clearBtn" class="btn-clear">Werksspeicher löschen</button>
+  </div>
 </div>
 
 <script>
 let audioCtx, analyserFast, analyserDeep, microphone;
 let isListening = false;
 
-// Kaskadierende Arrays vorkompiliert zur Leistungssteigerung (Vermeidung von GC-Spikes)
 const FAST_FFT_SIZE = 4096;
-let DEEP_FFT_SIZE = 32768; // Web Audio API Maximum für höchste Genauigkeit im Bass
+let DEEP_FFT_SIZE = 32768;
 
 const dataTimeFast = new Float32Array(FAST_FFT_SIZE);
 let dataTimeDeep = new Float32Array(DEEP_FFT_SIZE);
@@ -208,9 +235,11 @@ let dataFreqDeep = new Float32Array(DEEP_FFT_SIZE / 2);
 
 // Zustands- und Hysterese-Variablen
 let currentKeyNum = null;
-let lastKeyNum = null;
 let noteStartTimeMs = 0;
 let lastValidSignalMs = 0;
+
+// Dual-Hybrid Variable: Anker-Frequenz zum Halten des Signals
+let lockedF0 = -1;
 
 let medianBHistory = [];
 let medianF0History = [];
@@ -218,16 +247,20 @@ let medianF0History = [];
 let currentB = 0;
 let smoothedF0 = 0;
 let strobePhase = 0;
+
 let signalHoldCounter = 0;
-const SIGNAL_HOLD_FRAMES = 45; // ~0.75 Sek. Hold
+const SIGNAL_HOLD_FRAMES = 180; 
+
 let lastCents = 0;
 
 let pianoData = JSON.parse(localStorage.getItem('piano_pro_raw')) || new Array(88).fill(null);
+let saveHistory = JSON.parse(localStorage.getItem('piano_pro_history')) || [];
 let smoothedBModel = new Array(88).fill(0);
 
 // UI Elemente
 const startBtn = document.getElementById('startBtn');
 const saveBtn = document.getElementById('saveBtn');
+const undoBtn = document.getElementById('undoBtn');
 const clearBtn = document.getElementById('clearBtn');
 const a4Input = document.getElementById('a4Input');
 const noteEl = document.getElementById('note');
@@ -260,17 +293,15 @@ startBtn.addEventListener('click', async () => {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-    // Analyser 1: Fast (Echtzeit-Feedback, ~85ms)
     analyserFast = audioCtx.createAnalyser();
     analyserFast.fftSize = FAST_FFT_SIZE;
     analyserFast.smoothingTimeConstant = 0.0;
 
-    // Analyser 2: Deep (Labor-Präzision & Hohe Auflösung im Bass)
     analyserDeep = audioCtx.createAnalyser();
     try {
       analyserDeep.fftSize = DEEP_FFT_SIZE;
     } catch(e) {
-      DEEP_FFT_SIZE = 16384; // Fallback für ältere Browser
+      DEEP_FFT_SIZE = 16384;
       analyserDeep.fftSize = DEEP_FFT_SIZE;
       dataTimeDeep = new Float32Array(DEEP_FFT_SIZE);
       dataFreqDeep = new Float32Array(DEEP_FFT_SIZE / 2);
@@ -294,16 +325,38 @@ startBtn.addEventListener('click', async () => {
 
 saveBtn.addEventListener('click', () => {
   if (currentKeyNum !== null && currentKeyNum >= 1 && currentKeyNum <= 88 && currentB > 0) {
-    pianoData[currentKeyNum - 1] = currentB;
+    const keyIndex = currentKeyNum - 1;
+    pianoData[keyIndex] = currentB;
+    
+    // Reihenfolge für Rückgängig-Funktion speichern
+    saveHistory = saveHistory.filter(k => k !== keyIndex); // Duplikate entfernen
+    saveHistory.push(keyIndex);
+
     localStorage.setItem('piano_pro_raw', JSON.stringify(pianoData));
+    localStorage.setItem('piano_pro_history', JSON.stringify(saveHistory));
     updateGlobalModel();
+  }
+});
+
+undoBtn.addEventListener('click', () => {
+  if (saveHistory.length > 0) {
+    const lastKeyIndex = saveHistory.pop();
+    pianoData[lastKeyIndex] = null;
+
+    localStorage.setItem('piano_pro_raw', JSON.stringify(pianoData));
+    localStorage.setItem('piano_pro_history', JSON.stringify(saveHistory));
+    updateGlobalModel();
+  } else {
+    alert("Keine gespeicherten Werte zum Löschen vorhanden.");
   }
 });
 
 clearBtn.addEventListener('click', () => {
   if (confirm("Kompletten Stimm-Speicher zurücksetzen?")) {
     pianoData = new Array(88).fill(null);
+    saveHistory = [];
     localStorage.removeItem('piano_pro_raw');
+    localStorage.removeItem('piano_pro_history');
     updateGlobalModel();
   }
 });
@@ -317,7 +370,6 @@ function getInterpolatedPeakBin(dataArray, bin) {
   return bin + p;
 }
 
-// Gewichteter Median: Sehr robust gegen Anschlags-Geräusche (Ausreißer)
 function getMedian(arr) {
   if(arr.length === 0) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
@@ -325,7 +377,6 @@ function getMedian(arr) {
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-// YIN Pitch Detection (Arbeitet flexibel auf jedem Puffer - Fast oder Deep)
 function getPitchYIN(buffer, sampleRate) {
   const minFreq = 25; const maxFreq = 4500;
   const W = Math.floor(buffer.length / 2);
@@ -344,7 +395,7 @@ function getPitchYIN(buffer, sampleRate) {
   yinBuffer[0] = 1;
   let runningSum = 0;
   let tauEstimate = -1;
-  const threshold = 0.20;
+  const threshold = 0.25;
 
   for (let t = 1; t <= maxTau; t++) {
     runningSum += yinBuffer[t];
@@ -372,11 +423,10 @@ function getPitchYIN(buffer, sampleRate) {
   return tauEstimate > 0 ? sampleRate / tauEstimate : -1;
 }
 
-// Extrahiert Partiale und B-Wert aus einem beliebigen Frequenzspektrum (Fast oder Deep)
 function extractDataFromSpectrum(f0Guide, dataFreqArray, hzPerBin, nyquist) {
   let exactF0 = f0Guide;
   let partial1 = findPartialPeak(dataFreqArray, f0Guide * 0.96, f0Guide * 1.04, hzPerBin);
-  if (partial1 && partial1.vol > -95) {
+  if (partial1 && partial1.vol > -98) {
     exactF0 = partial1.freq;
   }
 
@@ -424,14 +474,13 @@ function processAudio() {
 
     const now = Date.now();
 
-    if (rms > 0.0015) {
+    if (rms > 0.0003) {
       const sampleRate = audioCtx.sampleRate;
       const nyquist = sampleRate / 2;
       
       const isDeepReady = (now - noteStartTimeMs) > 600;
       let yinF0 = -1;
 
-      // YIN nutzt im Deep-Modus den großen Zeitpuffer für maximale Auflösung im Bass
       if (!isDeepReady) {
         yinF0 = getPitchYIN(dataTimeFast, sampleRate);
       } else {
@@ -439,13 +488,23 @@ function processAudio() {
         yinF0 = getPitchYIN(dataTimeDeep, sampleRate);
       }
 
+      let activeF0 = -1;
+      let isYinActive = false;
+
       if (yinF0 !== -1 && yinF0 > 25 && yinF0 < 4500) {
-        // Welcher Ton ist das? (für Note-Change-Erkennung)
+        lockedF0 = yinF0;
+        activeF0 = yinF0;
+        isYinActive = true;
+      } else if (lockedF0 > 0 && (now - lastValidSignalMs < 3500)) {
+        activeF0 = lockedF0;
+        isYinActive = false;
+      }
+
+      if (activeF0 > 0) {
         const a4Freq = parseFloat(a4Input.value) || 440;
-        const roughNoteInfo = calculateTuning(yinF0, a4Freq);
+        const roughNoteInfo = calculateTuning(activeF0, a4Freq);
         
-        // Ton-Wechsel erkannt -> Historie flushen (Neustart)
-        if (roughNoteInfo.keyNum !== currentKeyNum || (now - lastValidSignalMs > 400)) {
+        if (roughNoteInfo.keyNum !== currentKeyNum || (now - lastValidSignalMs > 800)) {
           currentKeyNum = roughNoteInfo.keyNum;
           noteStartTimeMs = now;
           medianBHistory = [];
@@ -456,45 +515,39 @@ function processAudio() {
         let extraction;
 
         if (!isDeepReady) {
-          // Phase 1: Schnelle Reaktion (Fast FFT)
           analyserFast.getFloatFrequencyData(dataFreqFast);
           const hzPerBinFast = nyquist / (FAST_FFT_SIZE / 2);
-          extraction = extractDataFromSpectrum(yinF0, dataFreqFast, hzPerBinFast, nyquist);
+          extraction = extractDataFromSpectrum(activeF0, dataFreqFast, hzPerBinFast, nyquist);
           
-          modeBadge.innerText = "Echtzeit (Fast)";
-          modeBadge.className = "mode-badge mode-fast";
+          modeBadge.innerText = isYinActive ? "Echtzeit (Fast)" : "Track & Lock (Fast)";
+          modeBadge.className = isYinActive ? "mode-badge mode-fast" : "mode-badge mode-hold";
         } else {
-          // Phase 2: Labor-Präzision übernimmt nahtlos (Deep FFT + Deep YIN)
           analyserDeep.getFloatFrequencyData(dataFreqDeep);
           const hzPerBinDeep = nyquist / (analyserDeep.fftSize / 2);
-          extraction = extractDataFromSpectrum(yinF0, dataFreqDeep, hzPerBinDeep, nyquist);
+          extraction = extractDataFromSpectrum(activeF0, dataFreqDeep, hzPerBinDeep, nyquist);
           
-          modeBadge.innerText = "Präzision (Deep)";
-          modeBadge.className = "mode-badge mode-deep";
+          modeBadge.innerText = isYinActive ? "Präzision (Deep)" : "Track & Lock (Deep)";
+          modeBadge.className = isYinActive ? "mode-badge mode-deep" : "mode-badge mode-hold";
         }
 
-        // Werte der aktuellen Messung in den gleitenden Median werfen
         if (extraction.calcB >= 0.000005 && extraction.calcB <= 0.08) {
           medianBHistory.push(extraction.calcB);
-          // Halte die letzten 20 Messungen im Pool
           if (medianBHistory.length > 20) medianBHistory.shift(); 
         }
 
         medianF0History.push(extraction.exactF0);
         if (medianF0History.length > 15) medianF0History.shift();
 
-        // 3. Werte Auslesen & Berechnen
         currentB = getMedian(medianBHistory);
         smoothedF0 = getMedian(medianF0History);
         
-        // Cents & Anzeige berechnen
         const noteInfo = calculateTuning(smoothedF0, a4Freq);
         
         saveBtn.disabled = (currentB === 0);
         lastCents = noteInfo.cents;
         signalHoldCounter = SIGNAL_HOLD_FRAMES;
 
-        // UI Update
+        // UI Updates
         noteEl.innerText = noteInfo.note;
         freqEl.innerText = smoothedF0.toFixed(2);
         pureTargetEl.innerText = noteInfo.pureTarget.toFixed(2) + " Hz";
@@ -520,9 +573,10 @@ function processAudio() {
   function handleSignalHold() {
     if (signalHoldCounter > 0) {
       signalHoldCounter--;
-      drawStrobe(lastCents); // Strobe dreht sanft aus
+      drawStrobe(lastCents * (signalHoldCounter / SIGNAL_HOLD_FRAMES));
     } else {
       currentKeyNum = null;
+      lockedF0 = -1;
       modeBadge.innerText = "Standby";
       modeBadge.className = "mode-badge";
       drawStrobe(0, true);
@@ -547,7 +601,7 @@ function findPartialPeak(dataArray, minHz, maxHz, hzPerBin) {
       }
     }
   }
-  if (peakBin !== -1 && maxVol > -98) {
+  if (peakBin !== -1 && maxVol > -100) {
     const exactBin = getInterpolatedPeakBin(dataArray, peakBin);
     return { freq: exactBin * hzPerBin, vol: maxVol };
   }
