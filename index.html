@@ -236,16 +236,25 @@ startBtn.addEventListener('click', async () => {
       await audioCtx.resume();
     }
     
-    analyser = audioCtx.createAnalyser();
+        analyser = audioCtx.createAnalyser();
     
-    // Fallback für Browser/Geräte, die max. 16384 bei FFT erlauben (z.B. einige Safari-Versionen)
-    try {
-      analyser.fftSize = 32768; 
-    } catch(e) {
-      analyser.fftSize = 16384; 
+    // --- MAX-QUALITY FFT LOOP ---
+    // Startet extrem hoch (über aktuellem Standard), um zukunftssicher zu sein.
+    // Halbiert den Wert schrittweise, bis der Browser ihn akzeptiert.
+    let maxFftSize = 262144; 
+    while (maxFftSize >= 32) {
+      try {
+        analyser.fftSize = maxFftSize;
+        console.log("Maximale FFT-Auflösung aktiviert:", analyser.fftSize);
+        break; // Erfolgreich gesetzt -> Schleife abbrechen
+      } catch (e) {
+        maxFftSize /= 2; // FFT muss zwingend eine Zweierpotenz sein
+      }
     }
+    // ----------------------------
     
     analyser.smoothingTimeConstant = 0.05; 
+
     
     microphone = audioCtx.createMediaStreamSource(stream);
     microphone.connect(analyser);
